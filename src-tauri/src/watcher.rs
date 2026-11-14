@@ -235,6 +235,23 @@ mod tests {
         writer.finish().unwrap();
     }
 
+    /// Like `write_office_file`, but with `docProps/core.xml` set to
+    /// `metadata`, to simulate Office rewriting its own save metadata (revision
+    /// counter, modified timestamp) independent of whatever the user changed.
+    fn write_office_file_with_metadata(path: &Path, body: &[u8], metadata: &[u8]) {
+        let file = std::fs::File::create(path).expect("creating office file");
+        let mut writer = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::DEFAULT
+            .compression_method(zip::CompressionMethod::Deflated);
+        writer.start_file("[Content_Types].xml", options).unwrap();
+        writer.write_all(b"<Types/>").unwrap();
+        writer.start_file("docProps/core.xml", options).unwrap();
+        writer.write_all(metadata).unwrap();
+        writer.start_file("ppt/slides/slide1.xml", options).unwrap();
+        writer.write_all(body).unwrap();
+        writer.finish().unwrap();
+    }
+
     /// The product's whole promise: save a file in a watched folder and a
     /// version appears on its own. Exercises the real debouncer, the real
     /// filesystem and the real database - the only thing stubbed is the five
@@ -362,5 +379,50 @@ mod tests {
     fn untracked_extensions_are_rejected() {
         assert!(!is_trackable(Path::new("notes.txt")));
         assert!(!is_trackable(Path::new("no_extension")));
+    }
+
+    /// The user-visible reason for the whole `manifest_hash` change: Office
+    /// rewrites `docProps/core.xml` on every save, even one that changes
+    /// nothing a user would recognize, and that must not produce a version.
+    #[test]
+    fn metadata_only_resave_does_not_record_a_second_version() {
+        let vault_dir = scratch();
+        let objects_dir = scratch();
+        let db_dir = scratch();
+
+        let root = vault_dir.path().canonicalize().expect("canonicalizing vault");
+        std::fs::create_dir_all(root.join(".tracer")).expect("creating .tracer");
+        let conn = db::init_db(&db_dir.path().join("tracer.db")).expect("init db");
+        db::add_vault(&conn, root.to_str().unwrap()).expect("adding vault");
+        let conn = Arc::new(Mutex::new(conn));
+
+        let (tx, rx) = mpsc::channel();
+        let _handle = spawn_with_debounce(
+            vec![root.clone()],
+            Arc::clone(&conn),
+            objects_dir.path().to_path_buf(),
+            move |file_id, revision_id| {
+                let _ = tx.send((file_id, revision_id));
+            },
+            Duration::from_millis(150),
+        )
+        .expect("spawning watcher");
+
+        let deck = root.join("deck.pptx");
+
+        write_office_file_with_metadata(&deck, b"<p>draft</p>", b"<cp:revision>1</cp:revision>");
+        let (file_id, _first) = rx
+            .recv_timeout(Duration::from_secs(20))
+            .expect("saving a file should record a version");
+
+        write_office_file_with_metadata(&deck, b"<p>draft</p>", b"<cp:revision>2</cp:revision>");
+        assert!(
+            rx.recv_timeout(Duration::from_secs(3)).is_err(),
+            "a metadata-only resave must not record a version"
+        );
+
+        let conn = conn.lock().unwrap();
+        let timeline = db::get_timeline(&conn, file_id).expect("reading timeline");
+        assert_eq!(timeline.len(), 1, "one real edit, one version");
     }
 }

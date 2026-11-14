@@ -330,8 +330,9 @@ mod tests {
     /// Round-trips a genuine Office file, which a synthetic zip cannot stand in
     /// for: only a real archive has the mixed Stored/Deflated entries, the
     /// 1980-01-01 timestamps and the ~180 parts that a deck actually contains.
-    /// Reads every Office file in the repo's `test-data/` folder; see the README
-    /// there. Ignored by default so a normal `cargo test` stays fast.
+    /// Reads every Office file in the repo's `test-data/` folder, which is
+    /// gitignored because real documents must not be published - create it and
+    /// drop throwaway files in. Ignored by default so `cargo test` stays fast.
     ///
     /// `cargo test --lib real_office_file_round_trips -- --ignored --nocapture`
     ///
@@ -357,7 +358,7 @@ mod tests {
 
         assert!(
             !sources.is_empty(),
-            "no .pptx/.docx/.xlsx files in {} - see its README",
+            "no .pptx/.docx/.xlsx files in {} - put a throwaway Office file there",
             test_data.display()
         );
 

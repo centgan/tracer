@@ -36,6 +36,12 @@ impl WatchHandle {
 }
 
 fn is_trackable(path: &Path) -> bool {
+    // The watcher must never record its own bookkeeping - without this a
+    // save under `.tracer/` would eventually get treated as a tracked file.
+    if path.components().any(|c| c.as_os_str() == ".tracer") {
+        return false;
+    }
+
     let Some(extension) = path.extension() else {
         return false;
     };
@@ -144,6 +150,15 @@ fn process_path(
         let Some(vault) = db::find_vault_for_path(&conn, path)? else {
             return Ok(());
         };
+
+        // `.tracer` is the user-facing on/off switch (see project_plan.md):
+        // deleting it must stop tracking immediately, with no restart and no
+        // app interaction, so this is checked on every save rather than once
+        // at startup.
+        if !Path::new(&vault.root_path).join(".tracer").is_dir() {
+            return Ok(());
+        }
+
         let Ok(relative_path) = path.strip_prefix(&vault.root_path) else {
             return Ok(());
         };
@@ -231,6 +246,7 @@ mod tests {
         let db_dir = scratch();
 
         let root = vault_dir.path().canonicalize().expect("canonicalizing vault");
+        std::fs::create_dir_all(root.join(".tracer")).expect("creating .tracer");
         let conn = db::init_db(&db_dir.path().join("tracer.db")).expect("init db");
         db::add_vault(&conn, root.to_str().unwrap()).expect("adding vault");
         let conn = Arc::new(Mutex::new(conn));
@@ -281,6 +297,52 @@ mod tests {
                 .relative_path,
             "deck.pptx"
         );
+    }
+
+    /// The product's other hard requirement: deleting `.tracer` turns
+    /// tracking off immediately, and creating it turns tracking on, with no
+    /// app restart in between.
+    #[test]
+    fn tracer_marker_folder_gates_whether_saves_are_recorded() {
+        let vault_dir = scratch();
+        let objects_dir = scratch();
+        let db_dir = scratch();
+
+        let root = vault_dir.path().canonicalize().expect("canonicalizing vault");
+        let conn = db::init_db(&db_dir.path().join("tracer.db")).expect("init db");
+        db::add_vault(&conn, root.to_str().unwrap()).expect("adding vault");
+        let conn = Arc::new(Mutex::new(conn));
+
+        let (tx, rx) = mpsc::channel();
+        let _handle = spawn_with_debounce(
+            vec![root.clone()],
+            Arc::clone(&conn),
+            objects_dir.path().to_path_buf(),
+            move |file_id, revision_id| {
+                let _ = tx.send((file_id, revision_id));
+            },
+            Duration::from_millis(150),
+        )
+        .expect("spawning watcher");
+
+        let deck = root.join("deck.pptx");
+
+        write_office_file(&deck, b"<p>first draft</p>");
+        assert!(
+            rx.recv_timeout(Duration::from_secs(3)).is_err(),
+            "a save must not be recorded while .tracer is absent"
+        );
+
+        std::fs::create_dir_all(root.join(".tracer")).expect("creating .tracer");
+        write_office_file(&deck, b"<p>second draft</p>");
+        rx.recv_timeout(Duration::from_secs(20))
+            .expect("saving a file should record a version once .tracer exists");
+    }
+
+    #[test]
+    fn paths_inside_the_tracer_folder_are_never_trackable() {
+        assert!(!is_trackable(Path::new("/vault/.tracer/deck.pptx")));
+        assert!(!is_trackable(Path::new("/vault/sub/.tracer/nested/deck.pptx")));
     }
 
     #[test]

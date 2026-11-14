@@ -9,6 +9,15 @@ pub struct Vault {
     pub id: i64,
     pub root_path: String,
     pub is_active: bool,
+    /// Whether `root_path/.tracer` still exists. Not a column - the folder is
+    /// the user-facing on/off switch for tracking (see project_plan.md), so
+    /// this is computed from disk on every read rather than cached in SQLite,
+    /// where it could go stale the moment someone deletes the folder.
+    pub has_tracer_folder: bool,
+}
+
+fn has_tracer_folder(root_path: &str) -> bool {
+    Path::new(root_path).join(".tracer").is_dir()
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -161,6 +170,7 @@ pub fn add_vault(conn: &Connection, root_path: &str) -> Result<Vault> {
 
     Ok(Vault {
         id,
+        has_tracer_folder: has_tracer_folder(root_path),
         root_path: root_path.to_string(),
         is_active: true,
     })
@@ -170,22 +180,13 @@ pub fn list_vaults(conn: &Connection) -> Result<Vec<Vault>> {
     let mut stmt = conn.prepare("SELECT id, root_path, is_active FROM vaults ORDER BY id ASC")?;
 
     let rows = stmt.query_map([], |row| {
+        let root_path: String = row.get(1)?;
         Ok(Vault {
             id: row.get(0)?,
-            root_path: row.get(1)?,
             is_active: row.get::<_, i64>(2)? != 0,
+            has_tracer_folder: has_tracer_folder(&root_path),
+            root_path,
         })
-    })?;
-
-    rows.collect()
-}
-
-pub fn get_active_vault_paths(conn: &Connection) -> Result<Vec<PathBuf>> {
-    let mut stmt = conn.prepare("SELECT root_path FROM vaults WHERE is_active = 1")?;
-
-    let rows = stmt.query_map([], |row| {
-        let root_path: String = row.get(0)?;
-        Ok(PathBuf::from(root_path))
     })?;
 
     rows.collect()
@@ -209,10 +210,12 @@ pub fn find_vault_for_path(conn: &Connection, path: &Path) -> Result<Option<Vaul
     let mut stmt = conn.prepare("SELECT id, root_path, is_active FROM vaults WHERE is_active = 1")?;
 
     let vaults = stmt.query_map([], |row| {
+        let root_path: String = row.get(1)?;
         Ok(Vault {
             id: row.get(0)?,
-            root_path: row.get(1)?,
             is_active: row.get::<_, i64>(2)? != 0,
+            has_tracer_folder: has_tracer_folder(&root_path),
+            root_path,
         })
     })?;
 

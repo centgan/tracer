@@ -6,6 +6,7 @@
   import FoldersPane from "$lib/FoldersPane.svelte";
   import FilesPane from "$lib/FilesPane.svelte";
   import TimelinePane from "$lib/TimelinePane.svelte";
+  import StatusBar from "$lib/StatusBar.svelte";
 
   function errorMessage(e: unknown): string {
     return e instanceof Error ? e.message : String(e);
@@ -32,6 +33,9 @@
     files && files.status === "loaded"
       ? (files.data.find((f) => f.id === selectedFileId) ?? null)
       : null,
+  );
+  let watchedCount = $derived(
+    vaults.status === "loaded" ? vaults.data.filter((v) => v.hasTracerFolder).length : null,
   );
 
   async function loadVaults() {
@@ -161,6 +165,8 @@
     <p class="tagline">Every save, kept. Nothing to configure.</p>
   </header>
 
+  <StatusBar {watchedCount} />
+
   <div class="panes">
     <FoldersPane
       {vaults}
@@ -199,6 +205,9 @@
     --accent-soft: #e8f0ff;
     --on-accent: #ffffff;
     --error: #c0392b;
+    --warn: #9a6b1f;
+    --warn-soft: #fbf0dc;
+    --ok: #2f8f4e;
     --flash: #fff6cf;
 
     font-family:
@@ -220,6 +229,9 @@
       --accent-soft: #223252;
       --on-accent: #0f0f0f;
       --error: #ff6b5e;
+      --warn: #e0ad5c;
+      --warn-soft: #3a311d;
+      --ok: #5ec47f;
       --flash: #3a3420;
       color-scheme: dark;
     }

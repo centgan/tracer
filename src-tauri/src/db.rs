@@ -419,15 +419,23 @@ mod tests {
     use super::*;
     use tempfile::NamedTempFile;
 
+    /// Scratch space for tests, kept inside the project under `target/` rather
+    /// than the OS temp directory, so a test run leaves nothing outside the repo.
+    fn temp_file() -> NamedTempFile {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/test-tmp");
+        std::fs::create_dir_all(&root).expect("creating test scratch directory");
+        NamedTempFile::new_in(&root).expect("create temp file")
+    }
+
     fn temp_db() -> (NamedTempFile, Connection) {
-        let file = NamedTempFile::new().expect("create temp file");
+        let file = temp_file();
         let conn = init_db(file.path()).expect("init db");
         (file, conn)
     }
 
     #[test]
     fn migration_runs_and_is_idempotent_on_reopen() {
-        let file = NamedTempFile::new().expect("create temp file");
+        let file = temp_file();
 
         {
             let conn = init_db(file.path()).expect("init db");

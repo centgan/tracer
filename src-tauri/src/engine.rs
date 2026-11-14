@@ -301,7 +301,22 @@ fn load_object(objects_root: &Path, hash: &str) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
+    use tempfile::TempDir;
+
+    /// Scratch space for tests, kept inside the project under `target/` rather
+    /// than the OS temp directory, so a test run never scatters copies of real
+    /// documents outside this repo.
+    fn scratch_root() -> PathBuf {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/test-tmp");
+        fs::create_dir_all(&root).expect("creating test scratch directory");
+        root
+    }
+
+    /// Shadows `tempfile::tempdir` so every test's scratch lands in `target/`.
+    /// Still deleted on drop, exactly like the real one.
+    fn tempdir() -> std::io::Result<TempDir> {
+        TempDir::new_in(scratch_root())
+    }
 
     /// A small archive mixing Stored and Deflated entries, a name containing
     /// `/`, and two entries with identical content (to prove object dedupe).
@@ -406,10 +421,14 @@ mod tests {
             .collect();
         assert_eq!(original_names, rebuilt_names, "entry order changed");
 
-        // Leaked deliberately, and under the original extension: the whole point
-        // is for a human to double-click this and see whether Office complains.
+        // Kept deliberately, under the original extension: the whole point is
+        // for a human to double-click this and see whether Office complains.
+        // Inside target/ so these copies of real documents stay in the repo and
+        // stay gitignored.
         let name = source.file_name().expect("fixture has a file name");
-        let keep = std::env::temp_dir().join(format!("tracer_restored_{}", name.to_string_lossy()));
+        let keep_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/test-restored");
+        fs::create_dir_all(&keep_dir).unwrap();
+        let keep = keep_dir.join(name);
         fs::copy(&dest, &keep).unwrap();
         println!(
             "{}: restored {} parts; open this and check for a repair dialog:\n  {}",

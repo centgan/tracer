@@ -1,6 +1,14 @@
 // Mirrors the Rust types in src-tauri/src/db.rs. Rust serializes camelCase.
 
-export type Vault = { id: number; rootPath: string; isActive: boolean };
+export type Vault = {
+  id: number;
+  rootPath: string;
+  isActive: boolean;
+  // Computed from the filesystem. False means the folder's `.tracer`
+  // directory is gone, so Tracer has stopped watching it even though it's
+  // still in the list.
+  hasTracerFolder: boolean;
+};
 
 export type TrackedFile = {
   id: number;

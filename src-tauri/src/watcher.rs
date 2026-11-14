@@ -61,10 +61,22 @@ pub fn spawn(
     objects_root: PathBuf,
     on_revision: impl Fn(i64, i64) + Send + 'static,
 ) -> anyhow::Result<WatchHandle> {
+    spawn_with_debounce(paths, conn, objects_root, on_revision, DEBOUNCE_TIMEOUT)
+}
+
+/// `spawn`, with the debounce window exposed so tests don't wait five seconds
+/// per save.
+fn spawn_with_debounce(
+    paths: Vec<PathBuf>,
+    conn: Arc<Mutex<Connection>>,
+    objects_root: PathBuf,
+    on_revision: impl Fn(i64, i64) + Send + 'static,
+    debounce: Duration,
+) -> anyhow::Result<WatchHandle> {
     let (tx, rx) = mpsc::channel::<DebounceEventResult>();
 
-    let mut debouncer = new_debouncer(DEBOUNCE_TIMEOUT, None, tx)
-        .context("creating file watcher debouncer")?;
+    let mut debouncer =
+        new_debouncer(debounce, None, tx).context("creating file watcher debouncer")?;
 
     for path in &paths {
         debouncer
@@ -184,6 +196,92 @@ fn process_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::TempDir;
+
+    /// Scratch space inside the project under `target/`, never the OS temp
+    /// directory, so a test run leaves nothing outside this repo.
+    fn scratch() -> TempDir {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/test-tmp");
+        std::fs::create_dir_all(&root).expect("creating test scratch directory");
+        TempDir::new_in(root).expect("creating scratch directory")
+    }
+
+    /// A minimal but genuine zip, so the engine has something real to snapshot.
+    fn write_office_file(path: &Path, body: &[u8]) {
+        let file = std::fs::File::create(path).expect("creating office file");
+        let mut writer = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::DEFAULT
+            .compression_method(zip::CompressionMethod::Deflated);
+        writer.start_file("[Content_Types].xml", options).unwrap();
+        writer.write_all(b"<Types/>").unwrap();
+        writer.start_file("ppt/slides/slide1.xml", options).unwrap();
+        writer.write_all(body).unwrap();
+        writer.finish().unwrap();
+    }
+
+    /// The product's whole promise: save a file in a watched folder and a
+    /// version appears on its own. Exercises the real debouncer, the real
+    /// filesystem and the real database - the only thing stubbed is the five
+    /// second debounce window.
+    #[test]
+    fn saving_a_file_records_a_version_without_being_asked() {
+        let vault_dir = scratch();
+        let objects_dir = scratch();
+        let db_dir = scratch();
+
+        let root = vault_dir.path().canonicalize().expect("canonicalizing vault");
+        let conn = db::init_db(&db_dir.path().join("tracer.db")).expect("init db");
+        db::add_vault(&conn, root.to_str().unwrap()).expect("adding vault");
+        let conn = Arc::new(Mutex::new(conn));
+
+        let (tx, rx) = mpsc::channel();
+        // Bound, not dropped: dropping the handle stops the debouncer silently.
+        let _handle = spawn_with_debounce(
+            vec![root.clone()],
+            Arc::clone(&conn),
+            objects_dir.path().to_path_buf(),
+            move |file_id, revision_id| {
+                let _ = tx.send((file_id, revision_id));
+            },
+            Duration::from_millis(150),
+        )
+        .expect("spawning watcher");
+
+        let deck = root.join("deck.pptx");
+
+        write_office_file(&deck, b"<p>first draft</p>");
+        let (file_id, first) = rx
+            .recv_timeout(Duration::from_secs(20))
+            .expect("saving a file should record a version");
+
+        write_office_file(&deck, b"<p>second draft</p>");
+        let (_, second) = rx
+            .recv_timeout(Duration::from_secs(20))
+            .expect("changing the file should record another version");
+        assert_ne!(first, second);
+
+        // Saving without changing anything must not pile up a duplicate - this
+        // is what latest_manifest_hash is for, and later what stops a sync
+        // tool's own writes creating phantom versions.
+        write_office_file(&deck, b"<p>second draft</p>");
+        assert!(
+            rx.recv_timeout(Duration::from_secs(3)).is_err(),
+            "an unchanged save must not record a version"
+        );
+
+        let conn = conn.lock().unwrap();
+        let timeline = db::get_timeline(&conn, file_id).expect("reading timeline");
+        assert_eq!(timeline.len(), 2, "two real edits, two versions");
+        assert!(timeline[0].part_count > 0);
+        assert_eq!(
+            db::get_revision_target(&conn, timeline[0].id)
+                .unwrap()
+                .unwrap()
+                .relative_path,
+            "deck.pptx"
+        );
+    }
 
     #[test]
     fn trackable_extensions_pass_case_insensitively() {

@@ -69,6 +69,11 @@
     <div class="when">
       {formatRelativeTime(revision.timestamp)}
       <span class="size">· {formatBytes(revision.byteSize)}</span>
+      {#if revision.authorName}
+        <span class="author" title={revision.authorEmail ?? undefined}
+          >· {revision.authorName}</span
+        >
+      {/if}
       {#if justArrived}<span class="badge">new</span>{/if}
     </div>
 
@@ -146,7 +151,8 @@
     font-size: 0.9rem;
   }
 
-  .size {
+  .size,
+  .author {
     color: var(--muted);
   }
 

@@ -8,7 +8,7 @@ use notify::{RecommendedWatcher, RecursiveMode};
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
 use rusqlite::Connection;
 
-use crate::{db, engine};
+use crate::{db, engine, identity};
 
 /// Office saves fire several create/rename events per file; 5s collapses a
 /// single save into one batch instead of one revision per event.
@@ -65,9 +65,17 @@ pub fn spawn(
     paths: Vec<PathBuf>,
     conn: Arc<Mutex<Connection>>,
     objects_root: PathBuf,
+    identity_path: PathBuf,
     on_revision: impl Fn(i64, i64) + Send + 'static,
 ) -> anyhow::Result<WatchHandle> {
-    spawn_with_debounce(paths, conn, objects_root, on_revision, DEBOUNCE_TIMEOUT)
+    spawn_with_debounce(
+        paths,
+        conn,
+        objects_root,
+        identity_path,
+        on_revision,
+        DEBOUNCE_TIMEOUT,
+    )
 }
 
 /// `spawn`, with the debounce window exposed so tests don't wait five seconds
@@ -76,6 +84,7 @@ fn spawn_with_debounce(
     paths: Vec<PathBuf>,
     conn: Arc<Mutex<Connection>>,
     objects_root: PathBuf,
+    identity_path: PathBuf,
     on_revision: impl Fn(i64, i64) + Send + 'static,
     debounce: Duration,
 ) -> anyhow::Result<WatchHandle> {
@@ -101,7 +110,7 @@ fn spawn_with_debounce(
 
                     for path in paths {
                         if let Err(e) =
-                            process_path(&path, &conn, &objects_root, &on_revision)
+                            process_path(&path, &conn, &objects_root, &identity_path, &on_revision)
                         {
                             eprintln!("tracer: failed to process {}: {e:#}", path.display());
                         }
@@ -130,6 +139,7 @@ fn process_path(
     path: &Path,
     conn: &Arc<Mutex<Connection>>,
     objects_root: &Path,
+    identity_path: &Path,
     on_revision: &impl Fn(i64, i64),
 ) -> Result<()> {
     if !is_trackable(path) || !path.is_file() {
@@ -177,12 +187,21 @@ fn process_path(
     // deck must not block every other UI command for its duration.
     let snap = engine::snapshot(path, objects_root)?;
 
+    // Reading identity is a plain file read, not a database query - it must
+    // not serialize against every other command just because it happens to
+    // run on the watcher thread.
+    let who = identity::read(identity_path);
+    let author_name = (!who.name.is_empty()).then_some(who.name.as_str());
+    let author_email = (!who.email.is_empty()).then_some(who.email.as_str());
+
     let revision_id = {
         let mut conn = lock(conn)?;
 
-        if db::latest_manifest_hash(&conn, file_id)?.as_deref() == Some(&snap.manifest_hash) {
+        let latest = db::latest_revision(&conn, file_id)?;
+        if latest.as_ref().map(|(_, hash)| hash.as_str()) == Some(snap.manifest_hash.as_str()) {
             return Ok(());
         }
+        let parent_id = latest.map(|(id, _)| id);
 
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -191,12 +210,17 @@ fn process_path(
 
         db::insert_revision(
             &mut conn,
-            file_id,
-            timestamp,
-            snap.byte_size,
-            &snap.manifest_hash,
-            &snap.parts,
-            &snap.objects,
+            db::NewRevision {
+                file_id,
+                timestamp,
+                byte_size: snap.byte_size,
+                manifest_hash: &snap.manifest_hash,
+                parts: &snap.parts,
+                objects: &snap.objects,
+                author_name,
+                author_email,
+                parent_id,
+            },
         )?
     };
 
@@ -274,6 +298,7 @@ mod tests {
             vec![root.clone()],
             Arc::clone(&conn),
             objects_dir.path().to_path_buf(),
+            db_dir.path().join("identity.json"),
             move |file_id, revision_id| {
                 let _ = tx.send((file_id, revision_id));
             },
@@ -335,6 +360,7 @@ mod tests {
             vec![root.clone()],
             Arc::clone(&conn),
             objects_dir.path().to_path_buf(),
+            db_dir.path().join("identity.json"),
             move |file_id, revision_id| {
                 let _ = tx.send((file_id, revision_id));
             },
@@ -401,6 +427,7 @@ mod tests {
             vec![root.clone()],
             Arc::clone(&conn),
             objects_dir.path().to_path_buf(),
+            db_dir.path().join("identity.json"),
             move |file_id, revision_id| {
                 let _ = tx.send((file_id, revision_id));
             },
@@ -424,5 +451,50 @@ mod tests {
         let conn = conn.lock().unwrap();
         let timeline = db::get_timeline(&conn, file_id).expect("reading timeline");
         assert_eq!(timeline.len(), 1, "one real edit, one version");
+    }
+
+    /// End to end: an identity set on this device shows up on the version the
+    /// watcher records, and the first version of a file has no parent.
+    #[test]
+    fn a_recorded_version_carries_the_set_identity() {
+        let vault_dir = scratch();
+        let objects_dir = scratch();
+        let db_dir = scratch();
+
+        let root = vault_dir.path().canonicalize().expect("canonicalizing vault");
+        std::fs::create_dir_all(root.join(".tracer")).expect("creating .tracer");
+        let conn = db::init_db(&db_dir.path().join("tracer.db")).expect("init db");
+        db::add_vault(&conn, root.to_str().unwrap()).expect("adding vault");
+        let conn = Arc::new(Mutex::new(conn));
+
+        let identity_path = db_dir.path().join("identity.json");
+        identity::write(&identity_path, "Eric Feng", "eric@example.com").expect("setting identity");
+
+        let (tx, rx) = mpsc::channel();
+        let _handle = spawn_with_debounce(
+            vec![root.clone()],
+            Arc::clone(&conn),
+            objects_dir.path().to_path_buf(),
+            identity_path,
+            move |file_id, revision_id| {
+                let _ = tx.send((file_id, revision_id));
+            },
+            Duration::from_millis(150),
+        )
+        .expect("spawning watcher");
+
+        let deck = root.join("deck.pptx");
+
+        write_office_file(&deck, b"<p>first draft</p>");
+        let (file_id, _) = rx
+            .recv_timeout(Duration::from_secs(20))
+            .expect("saving a file should record a version");
+
+        let conn = conn.lock().unwrap();
+        let timeline = db::get_timeline(&conn, file_id).expect("reading timeline");
+        assert_eq!(timeline.len(), 1);
+        assert_eq!(timeline[0].author_name, Some("Eric Feng".to_string()));
+        assert_eq!(timeline[0].author_email, Some("eric@example.com".to_string()));
+        assert_eq!(timeline[0].parent_id, None, "a file's first version has no parent");
     }
 }

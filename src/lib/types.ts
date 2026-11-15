@@ -25,6 +25,18 @@ export type Revision = {
   manifestHash: string;
   partCount: number;
   milestone: string | null;
+  // Null for every version recorded before author tracking shipped - that's
+  // honest, not a bug, and must never be backfilled with a guess.
+  authorName: string | null;
+  authorEmail: string | null;
+  parentId: number | null;
+};
+
+// The user's own name/email, used only to label versions they create.
+// Empty strings mean unset, not an error.
+export type Identity = {
+  name: string;
+  email: string;
 };
 
 // A tracked file plus the timestamp of its newest revision, if it has one.

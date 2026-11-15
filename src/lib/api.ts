@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Vault, TrackedFile, Revision } from "./types";
+import type { Vault, TrackedFile, Revision, Identity } from "./types";
 
 function asMessage(e: unknown): string {
   if (typeof e === "string") return e;
@@ -26,3 +26,6 @@ export const saveCopy = (revisionId: number) => call<string>("save_copy", { revi
 export const quitApp = () => call<void>("quit_app");
 export const isAutostartEnabled = () => call<boolean>("is_autostart_enabled");
 export const setAutostart = (enabled: boolean) => call<void>("set_autostart", { enabled });
+export const getIdentity = () => call<Identity>("get_identity");
+export const setIdentity = (identity: Identity) =>
+  call<void>("set_identity", { name: identity.name, email: identity.email });

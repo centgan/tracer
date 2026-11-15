@@ -12,6 +12,9 @@ function version(id: number, timestamp: number, milestone: string | null = null)
     manifestHash: `hash${id}`,
     partCount: 3,
     milestone,
+    authorName: null,
+    authorEmail: null,
+    parentId: null,
   };
 }
 

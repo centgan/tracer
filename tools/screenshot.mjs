@@ -2,12 +2,17 @@
 // the design can be looked at instead of guessed at. Tauri isn't running here:
 // every invoke is answered from the fixtures below.
 //
-//   npm run dev          # in another terminal, serves on :1420
 //   node tools/screenshot.mjs
+//
+// Starts vite on :1420 if nothing is serving yet and stops it afterwards, so it
+// never leaves a server holding the port that `npm run tauri dev` needs. An
+// already-running server is used as-is and left alone.
 //
 // Writes PNGs to src-tauri/target/shots/ (gitignored).
 import { chromium } from "playwright";
 import { mkdirSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { connect } from "node:net";
 
 const OUT = "src-tauri/target/shots";
 const URL = "http://localhost:1420/";
@@ -70,8 +75,41 @@ async function shoot(page, name, { width = 1100, height = 760, dark = false } = 
   console.log(`${OUT}/${name}.png`);
 }
 
+const portIsOpen = () =>
+  new Promise((resolve) => {
+    // vite binds "localhost", which resolves to ::1 before 127.0.0.1 -
+    // probing the IPv4 address alone never sees it.
+    const socket = connect(1420, "localhost")
+      .on("connect", () => (socket.end(), resolve(true)))
+      .on("error", () => resolve(false));
+  });
+
+/// Starts vite only if nothing is already serving, and shuts down whatever it
+/// started. A leftover dev server holds port 1420 and makes the next
+/// `npm run tauri dev` fail with "Port 1420 is already in use" - a confusing
+/// error a long way from its cause.
+const ensureServer = async () => {
+  if (await portIsOpen()) return () => {};
+
+  // Spawned directly rather than through `npm run dev`: killing npm leaves the
+  // vite process it spawned orphaned and still holding the port.
+  const vite = spawn("node_modules/.bin/vite", ["dev"], { stdio: "ignore" });
+  for (let i = 0; i < 120; i++) {
+    if (await portIsOpen()) break;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  if (!(await portIsOpen())) {
+    vite.kill("SIGKILL");
+    throw new Error("vite did not start on :1420");
+  }
+  return () => vite.kill("SIGKILL");
+};
+
 const run = async () => {
   mkdirSync(OUT, { recursive: true });
+  const stopServer = await ensureServer();
+  process.on("exit", stopServer);
+  process.on("SIGINT", () => (stopServer(), process.exit(130)));
   const browser = await chromium.launch();
 
   for (const [label, table] of [["", RESPONSES], ["empty-", EMPTY]]) {
@@ -130,6 +168,7 @@ const run = async () => {
   }
 
   await browser.close();
+  stopServer();
 };
 
 run();

@@ -67,7 +67,26 @@ const sparseVersions = [
   parentId: v.id === 1 ? null : v.id - 1,
 }));
 
-const TIMELINES = { 1: versions, 3: sparseVersions };
+// Just enough history on the deck to drive the compare flow: a named older
+// version and today's unnamed one, far enough apart they never collapse into
+// one session.
+const deckVersions = [
+  { id: 102, ts: now - 10 * 60, milestone: null },
+  { id: 101, ts: now - 2 * day, milestone: "first full draft" },
+].map((v, i) => ({
+  id: v.id,
+  fileId: 2,
+  timestamp: v.ts,
+  byteSize: 5_204_000 - i * 1800,
+  manifestHash: `hash-${v.id}`,
+  partCount: 58,
+  milestone: v.milestone,
+  authorName: "Eric Feng",
+  authorEmail: "eric@example.com",
+  parentId: v.id === 101 ? null : v.id - 1,
+}));
+
+const TIMELINES = { 1: versions, 2: deckVersions, 3: sparseVersions };
 
 // Dedup payoff per file, independent of the timeline's own length. The sparse
 // file has one version's worth of history and nothing shared yet, so stats
@@ -78,11 +97,35 @@ const FILE_STATS = {
     logicalBytes: versions.reduce((sum, v) => sum + v.byteSize, 0),
     storedBytes: Math.round(versions.reduce((sum, v) => sum + v.byteSize, 0) * 0.22),
   },
+  2: {
+    versionCount: deckVersions.length,
+    logicalBytes: deckVersions.reduce((sum, v) => sum + v.byteSize, 0),
+    storedBytes: Math.round(deckVersions.reduce((sum, v) => sum + v.byteSize, 0) * 0.3),
+  },
   3: {
     versionCount: sparseVersions.length,
     logicalBytes: sparseVersions.reduce((sum, v) => sum + v.byteSize, 0),
     storedBytes: sparseVersions.reduce((sum, v) => sum + v.byteSize, 0) + 500,
   },
+};
+
+// compare_revisions's fixture: a realistic pptx diff. A couple of changed
+// slides, one picture added, one removed, and several bookkeeping entries
+// (docProps, [Content_Types].xml, _rels) that must never surface as named
+// changes - only their count should.
+const COMPARE_RESULT = {
+  changes: [
+    { entryName: "[Content_Types].xml", status: "changed" },
+    { entryName: "docProps/app.xml", status: "changed" },
+    { entryName: "docProps/core.xml", status: "changed" },
+    { entryName: "ppt/_rels/presentation.xml.rels", status: "changed" },
+    { entryName: "ppt/media/image11.png", status: "added" },
+    { entryName: "ppt/media/image3.png", status: "removed" },
+    { entryName: "ppt/slides/_rels/slide4.xml.rels", status: "changed" },
+    { entryName: "ppt/slides/slide4.xml", status: "changed" },
+    { entryName: "ppt/slides/slide9.xml", status: "changed" },
+  ].sort((a, b) => a.entryName.localeCompare(b.entryName)),
+  unchangedCount: 49,
 };
 
 const RESPONSES = {
@@ -103,6 +146,7 @@ const RESPONSES = {
   set_autostart: null,
   set_milestone: null,
   save_copy: "/Users/eric/Desktop/Chapter 3_rev31.docx",
+  compare_revisions: COMPARE_RESULT,
   add_vault: null,
   quit_app: null,
 };
@@ -226,6 +270,38 @@ const run = async () => {
       await page.waitForTimeout(200);
       await shoot(page, "sparse-light");
       await shoot(page, "sparse-dark", { dark: true });
+
+      // The compare flow: select a version, start the pick, then pick a
+      // second one. Driven on the deck, whose two versions have real
+      // slide/picture-shaped parts so the comparison reads true to life.
+      // Scoped to the timeline pane (the third pane) - its rows reuse time
+      // text ("today HH:MM") that also appears in the Files pane's own rows.
+      const timelinePane = page.locator(".panes > section").nth(2);
+      await page.emulateMedia({ colorScheme: "light" });
+      await page.getByText("Defense deck.pptx").first().click().catch(() => {});
+      await page.waitForTimeout(200);
+      await timelinePane
+        .getByRole("button", { name: /first full draft/ })
+        .click()
+        .catch(() => {});
+      await page.waitForTimeout(150);
+      await timelinePane
+        .getByRole("button", { name: "Compare…" })
+        .click()
+        .catch(() => {});
+      await page.waitForTimeout(150);
+      await shoot(page, "compare-picking");
+      await shoot(page, "compare-picking-dark", { dark: true });
+
+      await page.emulateMedia({ colorScheme: "light" });
+      await timelinePane
+        .getByRole("button", { name: /today/ })
+        .first()
+        .click()
+        .catch(() => {});
+      await page.waitForTimeout(250);
+      await shoot(page, "compare");
+      await shoot(page, "compare-dark", { dark: true });
 
       await page.emulateMedia({ colorScheme: "light" });
       await page.getByRole("button", { name: /settings/i }).click();

@@ -3,7 +3,14 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import * as api from "$lib/api";
-  import type { FileStats, FileWithLastChanged, Loadable, Revision, Vault } from "$lib/types";
+  import type {
+    CompareResult,
+    FileStats,
+    FileWithLastChanged,
+    Loadable,
+    Revision,
+    Vault,
+  } from "$lib/types";
   import FoldersPane from "$lib/FoldersPane.svelte";
   import FilesPane from "$lib/FilesPane.svelte";
   import TimelinePane from "$lib/TimelinePane.svelte";
@@ -152,6 +159,10 @@
     return api.saveCopy(revisionId);
   }
 
+  async function handleCompare(olderId: number, newerId: number): Promise<CompareResult> {
+    return api.compareRevisions(olderId, newerId);
+  }
+
   loadVaults();
 
   $effect(() => {
@@ -206,6 +217,7 @@
       {justArrivedId}
       onSetMilestone={handleSetMilestone}
       onSaveCopy={handleSaveCopy}
+      onCompare={handleCompare}
     />
   </div>
 

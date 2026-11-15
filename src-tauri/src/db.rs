@@ -506,6 +506,80 @@ pub fn get_revision_parts(conn: &Connection, revision_id: i64) -> Result<Vec<Par
     rows.collect()
 }
 
+/// How one part differs between two versions.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PartChange {
+    pub entry_name: String,
+    /// "added", "removed" or "changed", from the newer version's point of view.
+    pub status: String,
+}
+
+/// What changed between two versions, and how much didn't.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Comparison {
+    pub changes: Vec<PartChange>,
+    pub unchanged_count: i64,
+}
+
+/// Compares two versions by their part lists.
+///
+/// This is free: both versions already store a hash per part, so telling which
+/// slides differ is a set comparison, not a diff. `older` and `newer` are only
+/// names for the direction - "added" means present in `newer` and absent from
+/// `older` - so passing them the wrong way round inverts the labels rather than
+/// failing.
+pub fn compare_revisions(conn: &Connection, older: i64, newer: i64) -> Result<Comparison> {
+    let parts_of = |revision_id: i64| -> Result<Vec<(String, String)>> {
+        let mut stmt = conn.prepare(
+            "SELECT entry_name, object_hash FROM revision_parts WHERE revision_id = ?1",
+        )?;
+        let rows = stmt.query_map(params![revision_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect()
+    };
+
+    let old_parts: std::collections::HashMap<String, String> =
+        parts_of(older)?.into_iter().collect();
+    let new_parts: std::collections::HashMap<String, String> =
+        parts_of(newer)?.into_iter().collect();
+
+    let mut changes = Vec::new();
+    let mut unchanged_count = 0;
+
+    for (name, hash) in &new_parts {
+        match old_parts.get(name) {
+            None => changes.push(PartChange {
+                entry_name: name.clone(),
+                status: "added".to_string(),
+            }),
+            Some(old_hash) if old_hash != hash => changes.push(PartChange {
+                entry_name: name.clone(),
+                status: "changed".to_string(),
+            }),
+            Some(_) => unchanged_count += 1,
+        }
+    }
+
+    for name in old_parts.keys() {
+        if !new_parts.contains_key(name) {
+            changes.push(PartChange {
+                entry_name: name.clone(),
+                status: "removed".to_string(),
+            });
+        }
+    }
+
+    // HashMap iteration order is deliberately unspecified; sort so the same
+    // comparison always reads the same way.
+    changes.sort_by(|a, b| a.entry_name.cmp(&b.entry_name));
+
+    Ok(Comparison {
+        changes,
+        unchanged_count,
+    })
+}
+
 /// Upserts the milestone label for a revision.
 pub fn set_milestone(conn: &Connection, revision_id: i64, label: &str) -> Result<()> {
     conn.execute(
@@ -811,6 +885,93 @@ mod tests {
         assert_eq!(files_a.len(), 1);
         assert_eq!(files_b.len(), 1);
         assert_eq!(files_a[0].relative_path, files_b[0].relative_path);
+    }
+
+    #[test]
+    fn compare_revisions_names_what_changed_and_counts_what_did_not() {
+        let (_file, mut conn) = temp_db();
+
+        let vault = add_vault(&conn, "/a/foo").unwrap();
+        let file_id = upsert_file(&conn, vault.id, "deck.pptx", "pptx").unwrap();
+
+        let part = |order: i64, name: &str, hash: &str| PartRecord {
+            entry_order: order,
+            entry_name: name.to_string(),
+            compression_method: "deflated".into(),
+            object_hash: hash.to_string(),
+        };
+        let object = |hash: &str| ObjectRecord {
+            hash: hash.to_string(),
+            size: 10,
+            stored_size: 10,
+            compressed: false,
+        };
+
+        let objects: Vec<ObjectRecord> = ["same", "slide4_v1", "slide4_v2", "gone", "fresh"]
+            .iter()
+            .map(|h| object(h))
+            .collect();
+
+        let older = insert_revision(&mut conn, NewRevision {
+            file_id, timestamp: 1000, byte_size: 10, manifest_hash: "m1",
+            parts: &[
+                part(0, "ppt/slides/slide1.xml", "same"),
+                part(1, "ppt/slides/slide4.xml", "slide4_v1"),
+                part(2, "ppt/media/old.png", "gone"),
+            ],
+            objects: &objects,
+            author_name: None, author_email: None, parent_id: None,
+        }).unwrap();
+
+        let newer = insert_revision(&mut conn, NewRevision {
+            file_id, timestamp: 2000, byte_size: 10, manifest_hash: "m2",
+            parts: &[
+                part(0, "ppt/slides/slide1.xml", "same"),
+                part(1, "ppt/slides/slide4.xml", "slide4_v2"),
+                part(2, "ppt/media/new.png", "fresh"),
+            ],
+            objects: &objects,
+            author_name: None, author_email: None, parent_id: Some(older),
+        }).unwrap();
+
+        let diff = compare_revisions(&conn, older, newer).unwrap();
+
+        assert_eq!(diff.unchanged_count, 1, "slide1 was untouched");
+        assert_eq!(
+            diff.changes,
+            vec![
+                PartChange { entry_name: "ppt/media/new.png".into(), status: "added".into() },
+                PartChange { entry_name: "ppt/media/old.png".into(), status: "removed".into() },
+                PartChange { entry_name: "ppt/slides/slide4.xml".into(), status: "changed".into() },
+            ],
+            "sorted by name, so the same comparison always reads the same way"
+        );
+    }
+
+    #[test]
+    fn comparing_a_version_with_itself_finds_nothing() {
+        let (_file, mut conn) = temp_db();
+        let vault = add_vault(&conn, "/a/foo").unwrap();
+        let file_id = upsert_file(&conn, vault.id, "deck.pptx", "pptx").unwrap();
+
+        let objects = [ObjectRecord {
+            hash: "h".into(), size: 10, stored_size: 10, compressed: false,
+        }];
+        let id = insert_revision(&mut conn, NewRevision {
+            file_id, timestamp: 1000, byte_size: 10, manifest_hash: "m1",
+            parts: &[PartRecord {
+                entry_order: 0,
+                entry_name: "word/document.xml".into(),
+                compression_method: "deflated".into(),
+                object_hash: "h".into(),
+            }],
+            objects: &objects,
+            author_name: None, author_email: None, parent_id: None,
+        }).unwrap();
+
+        let diff = compare_revisions(&conn, id, id).unwrap();
+        assert!(diff.changes.is_empty());
+        assert_eq!(diff.unchanged_count, 1);
     }
 
     #[test]

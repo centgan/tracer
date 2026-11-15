@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Vault, TrackedFile, Revision, Identity, FileStats } from "./types";
+import type { Vault, TrackedFile, Revision, Identity, FileStats, CompareResult } from "./types";
 
 function asMessage(e: unknown): string {
   if (typeof e === "string") return e;
@@ -24,6 +24,8 @@ export const getFileStats = (fileId: number) => call<FileStats>("get_file_stats"
 export const setMilestone = (revisionId: number, label: string) =>
   call<void>("set_milestone", { revisionId, label });
 export const saveCopy = (revisionId: number) => call<string>("save_copy", { revisionId });
+export const compareRevisions = (olderId: number, newerId: number) =>
+  call<CompareResult>("compare_revisions", { olderId, newerId });
 export const quitApp = () => call<void>("quit_app");
 export const isAutostartEnabled = () => call<boolean>("is_autostart_enabled");
 export const setAutostart = (enabled: boolean) => call<void>("set_autostart", { enabled });

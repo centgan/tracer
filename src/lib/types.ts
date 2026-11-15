@@ -52,6 +52,21 @@ export type FileStats = {
   storedBytes: number;
 };
 
+// One changed zip entry between two versions, in the backend's own jargon
+// (entryName is a raw zip path like "ppt/slides/slide4.xml") - see
+// src/lib/partnames.ts for turning that into something a user recognises.
+export type PartChange = {
+  entryName: string;
+  status: "added" | "removed" | "changed";
+};
+
+// compare_revisions's result: sorted by entryName, oldest-to-newest implied
+// by which id the caller passed as olderId/newerId.
+export type CompareResult = {
+  changes: PartChange[];
+  unchangedCount: number;
+};
+
 // The three states every async pane can be in. `null` (used at the call
 // site, not part of this type) stands for "nothing to load yet" - e.g. no
 // folder picked - which is distinct from "loading" and needs its own copy.

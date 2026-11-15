@@ -185,6 +185,20 @@ fn list_tracked_files(
     db::list_tracked_files(&conn, vault_id).map_err(to_err)
 }
 
+/// Lists which parts of a file differ between two versions.
+///
+/// Cheap by construction: both versions already carry a hash per part, so this
+/// is a set comparison rather than a diff of any file contents.
+#[tauri::command]
+fn compare_revisions(
+    older_id: i64,
+    newer_id: i64,
+    state: State<'_, AppState>,
+) -> Result<db::Comparison, String> {
+    let conn = lock(&state)?;
+    db::compare_revisions(&conn, older_id, newer_id).map_err(to_err)
+}
+
 /// Backs the line that makes the point of the whole app visible: how much
 /// history there is, versus what it costs to keep.
 #[tauri::command]
@@ -381,6 +395,7 @@ pub fn run() {
             list_tracked_files,
             get_timeline,
             get_file_stats,
+            compare_revisions,
             set_milestone,
             save_copy,
             quit_app,

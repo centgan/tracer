@@ -67,6 +67,31 @@ export type CompareResult = {
   unchangedCount: number;
 };
 
+// compare_part_text's word-level comparison of one part's extracted text
+// between two versions. Mirrors `engine::{TextSpan,TextRow,TextComparison}`
+// in src-tauri/src/engine.rs.
+export type TextSpan = {
+  text: string;
+  changed: boolean;
+};
+
+export type TextRow = {
+  status: "same" | "added" | "removed" | "changed";
+  left: string | null;
+  right: string | null;
+  // Word-level pieces for a "changed" row, so the exact words that differ
+  // can be marked. Empty for every other status.
+  leftSpans: TextSpan[];
+  rightSpans: TextSpan[];
+};
+
+export type TextComparison = {
+  rows: TextRow[];
+  // False when neither side yielded any text, so the UI can explain itself
+  // instead of showing an empty table.
+  hasText: boolean;
+};
+
 // The three states every async pane can be in. `null` (used at the call
 // site, not part of this type) stands for "nothing to load yet" - e.g. no
 // folder picked - which is distinct from "loading" and needs its own copy.

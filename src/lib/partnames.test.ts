@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeEntry, summarizeChanges } from "./partnames";
+import { describeEntry, summarizeChanges, supportsTextCompare } from "./partnames";
 import type { PartChange } from "./types";
 
 describe("describeEntry", () => {
@@ -74,9 +74,9 @@ describe("summarizeChanges", () => {
       change("[Content_Types].xml", "changed"),
     ]);
 
-    expect(summary.changed).toEqual(["Slide 4"]);
-    expect(summary.added).toEqual(["Picture 9"]);
-    expect(summary.removed).toEqual(["Slide 7"]);
+    expect(summary.changed).toEqual([{ entryName: "ppt/slides/slide4.xml", label: "Slide 4" }]);
+    expect(summary.added).toEqual([{ entryName: "ppt/media/image9.png", label: "Picture 9" }]);
+    expect(summary.removed).toEqual([{ entryName: "ppt/slides/slide7.xml", label: "Slide 7" }]);
     expect(summary.internalCount).toBe(2);
   });
 
@@ -88,5 +88,31 @@ describe("summarizeChanges", () => {
 
   it("handles no changes at all", () => {
     expect(summarizeChanges([])).toEqual({ changed: [], added: [], removed: [], internalCount: 0 });
+  });
+});
+
+describe("supportsTextCompare", () => {
+  it.each([
+    "ppt/slides/slide4.xml",
+    "ppt/notesSlides/notesSlide2.xml",
+    "word/document.xml",
+    "word/footnotes.xml",
+    "word/endnotes.xml",
+    "word/header1.xml",
+    "word/footer1.xml",
+    "xl/sharedStrings.xml",
+  ])("says yes for %s", (entryName) => {
+    expect(supportsTextCompare(entryName)).toBe(true);
+  });
+
+  it.each([
+    "ppt/media/image3.png",
+    "word/media/image12.jpeg",
+    "xl/worksheets/sheet1.xml",
+    "ppt/theme/theme1.xml",
+    "word/styles.xml",
+    "docProps/core.xml",
+  ])("says no for %s - a picture or a part with no text to extract", (entryName) => {
+    expect(supportsTextCompare(entryName)).toBe(false);
   });
 });

@@ -21,6 +21,16 @@
   /* Transient "just arrived" tint. Same hue as --live - it's a live-update
      cue, not a fourth color. */
   --flash: rgb(0 122 61 / 16%);
+  /* Compare's added/removed meaning. --diff-add reuses --live's hue - green
+     already means "present and good" in this app (Watching); added text is
+     the same idea. --diff-remove is a new hue because nothing already means
+     "gone" - brick red, legible on both --well and --chrome. Never relied on
+     alone: a +/− marker and strikethrough/underline carry the same meaning
+     for colour-blind users. */
+  --diff-add: var(--live);
+  --diff-add-bg: rgb(0 122 61 / 14%);
+  --diff-remove: #a4201f;
+  --diff-remove-bg: rgb(164 32 31 / 14%);
 
   --title-a: #000080;
   --title-b: #1084d0;
@@ -79,6 +89,10 @@
     --live: #2fbf6e;
     --warn: #caa23a;
     --flash: rgb(47 191 110 / 20%);
+    --diff-add: var(--live);
+    --diff-add-bg: rgb(47 191 110 / 18%);
+    --diff-remove: #ff8a7a;
+    --diff-remove-bg: rgb(255 138 122 / 18%);
 
     /* Same hues, lifted in lightness/saturation so they still read against
        dark chrome instead of sinking into it. */

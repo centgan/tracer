@@ -9,6 +9,7 @@
     FileWithLastChanged,
     Loadable,
     Revision,
+    TextComparison,
     Vault,
   } from "$lib/types";
   import FoldersPane from "$lib/FoldersPane.svelte";
@@ -163,6 +164,14 @@
     return api.compareRevisions(olderId, newerId);
   }
 
+  async function handleComparePartText(
+    olderId: number,
+    newerId: number,
+    entryName: string,
+  ): Promise<TextComparison> {
+    return api.comparePartText(olderId, newerId, entryName);
+  }
+
   loadVaults();
 
   $effect(() => {
@@ -218,6 +227,7 @@
       onSetMilestone={handleSetMilestone}
       onSaveCopy={handleSaveCopy}
       onCompare={handleCompare}
+      onComparePartText={handleComparePartText}
     />
   </div>
 

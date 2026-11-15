@@ -128,6 +128,52 @@ const COMPARE_RESULT = {
   unchangedCount: 49,
 };
 
+// compare_part_text's fixture, for clicking "Slide 4" in the changed-parts
+// list: a realistic mix of an untouched paragraph, one with a single word
+// changed (word-level spans isolate just that word), an added paragraph and
+// a removed one.
+const TEXT_COMPARISON = {
+  rows: [
+    {
+      status: "same",
+      left: "Thank you for your continued partnership this quarter.",
+      right: "Thank you for your continued partnership this quarter.",
+      leftSpans: [],
+      rightSpans: [],
+    },
+    {
+      status: "changed",
+      left: "Revenue grew by 12% over the prior period.",
+      right: "Revenue grew by 18% over the prior period.",
+      leftSpans: [
+        { text: "Revenue grew by ", changed: false },
+        { text: "12%", changed: true },
+        { text: " over the prior period.", changed: false },
+      ],
+      rightSpans: [
+        { text: "Revenue grew by ", changed: false },
+        { text: "18%", changed: true },
+        { text: " over the prior period.", changed: false },
+      ],
+    },
+    {
+      status: "added",
+      left: null,
+      right: "We are also launching a new enterprise tier next month.",
+      leftSpans: [],
+      rightSpans: [],
+    },
+    {
+      status: "removed",
+      left: "The pilot program with three customers has concluded.",
+      right: null,
+      leftSpans: [],
+      rightSpans: [],
+    },
+  ],
+  hasText: true,
+};
+
 const RESPONSES = {
   list_vaults: [
     { id: 1, rootPath: "/Users/eric/Documents/Thesis", isActive: true, hasTracerFolder: true },
@@ -147,6 +193,7 @@ const RESPONSES = {
   set_milestone: null,
   save_copy: "/Users/eric/Desktop/Chapter 3_rev31.docx",
   compare_revisions: COMPARE_RESULT,
+  compare_part_text: TEXT_COMPARISON,
   add_vault: null,
   quit_app: null,
 };
@@ -303,7 +350,24 @@ const run = async () => {
       await shoot(page, "compare");
       await shoot(page, "compare-dark", { dark: true });
 
+      // The text-compare flow: click a changed slide's name to open the
+      // side-by-side view.
+      await timelinePane
+        .getByRole("button", { name: "Slide 4" })
+        .click()
+        .catch(() => {});
+      await page.waitForTimeout(200);
+      await shoot(page, "compare-text");
+      await shoot(page, "compare-text-dark", { dark: true });
       await page.emulateMedia({ colorScheme: "light" });
+      await shoot(page, "compare-text-narrow", { width: 700, height: 760 });
+
+      await timelinePane
+        .getByRole("button", { name: "Back to changed parts" })
+        .click()
+        .catch(() => {});
+      await page.waitForTimeout(150);
+
       await page.getByRole("button", { name: /settings/i }).click();
       await page.waitForTimeout(300);
       await shoot(page, "settings");

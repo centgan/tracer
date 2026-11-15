@@ -1,5 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Vault, TrackedFile, Revision, Identity, FileStats, CompareResult } from "./types";
+import type {
+  Vault,
+  TrackedFile,
+  Revision,
+  Identity,
+  FileStats,
+  CompareResult,
+  TextComparison,
+} from "./types";
 
 function asMessage(e: unknown): string {
   if (typeof e === "string") return e;
@@ -26,6 +34,8 @@ export const setMilestone = (revisionId: number, label: string) =>
 export const saveCopy = (revisionId: number) => call<string>("save_copy", { revisionId });
 export const compareRevisions = (olderId: number, newerId: number) =>
   call<CompareResult>("compare_revisions", { olderId, newerId });
+export const comparePartText = (olderId: number, newerId: number, entryName: string) =>
+  call<TextComparison>("compare_part_text", { olderId, newerId, entryName });
 export const quitApp = () => call<void>("quit_app");
 export const isAutostartEnabled = () => call<boolean>("is_autostart_enabled");
 export const setAutostart = (enabled: boolean) => call<void>("set_autostart", { enabled });

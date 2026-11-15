@@ -199,6 +199,44 @@ fn compare_revisions(
     db::compare_revisions(&conn, older_id, newer_id).map_err(to_err)
 }
 
+/// Pulls one part's text out of two versions and word-diffs it, for the
+/// side-by-side view a user gets by clicking a changed part in `compare_revisions`'
+/// results.
+///
+/// A part absent from a version (added/removed) yields no text on that side
+/// rather than an error - `engine::diff_text` renders that as every line
+/// added or removed, same as a part that genuinely has no recognised text.
+#[tauri::command]
+fn compare_part_text(
+    older_id: i64,
+    newer_id: i64,
+    entry_name: String,
+    state: State<'_, AppState>,
+) -> Result<engine::TextComparison, String> {
+    let part_text = |revision_id: i64| -> Result<Vec<String>, String> {
+        let part = {
+            let conn = lock(&state)?;
+            db::get_revision_parts(&conn, revision_id)
+                .map_err(to_err)?
+                .into_iter()
+                .find(|p| p.entry_name == entry_name)
+        };
+        match part {
+            None => Ok(Vec::new()),
+            Some(part) => {
+                let bytes = engine::load_object(&state.objects_root, &part.object_hash)
+                    .map_err(to_err)?;
+                Ok(engine::extract_text(&entry_name, &bytes))
+            }
+        }
+    };
+
+    let older_text = part_text(older_id)?;
+    let newer_text = part_text(newer_id)?;
+
+    Ok(engine::diff_text(&older_text, &newer_text))
+}
+
 /// Backs the line that makes the point of the whole app visible: how much
 /// history there is, versus what it costs to keep.
 #[tauri::command]
@@ -396,6 +434,7 @@ pub fn run() {
             get_timeline,
             get_file_stats,
             compare_revisions,
+            compare_part_text,
             set_milestone,
             save_copy,
             quit_app,

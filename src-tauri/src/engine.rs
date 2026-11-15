@@ -288,7 +288,7 @@ fn describe_stored_object(dest: &Path, hash: &str, size: i64) -> Result<ObjectRe
     })
 }
 
-fn load_object(objects_root: &Path, hash: &str) -> Result<Vec<u8>> {
+pub fn load_object(objects_root: &Path, hash: &str) -> Result<Vec<u8>> {
     let path = object_path(objects_root, hash);
     let mut raw = Vec::new();
     File::open(&path)
@@ -322,6 +322,258 @@ fn load_object(objects_root: &Path, hash: &str) -> Result<Vec<u8>> {
     }
 
     Ok(bytes)
+}
+
+// ---------------------------------------------------------------------------
+// Text extraction and comparison for "compare".
+//
+// project_plan.md's Diffing section is explicit about the trap: raw-diffing
+// the XML shows 400 changed lines for a one-word edit, because Office
+// reshuffles the markup on every save. So these functions pull just the text
+// runs out of a part (never touching layout, formatting or ids) and diff
+// *that*. No XML parser dependency - splitting on the paragraph tag and
+// scanning for run tags is the standard approach for OOXML text.
+// ---------------------------------------------------------------------------
+
+/// Finds every top-level `<tag ...>...</tag>` (or self-closing `<tag .../>`,
+/// whose content is empty) in `xml`, returning each occurrence's raw
+/// (undecoded) inner text in document order.
+///
+/// Tag-boundary aware, so asking for `"a:p"` never matches `"a:pPr"`.
+fn tag_spans<'a>(xml: &'a str, tag: &str) -> Vec<&'a str> {
+    let open_prefix = format!("<{tag}");
+    let close = format!("</{tag}>");
+    let mut out = Vec::new();
+    let mut offset = 0usize;
+
+    while let Some(start_rel) = xml[offset..].find(open_prefix.as_str()) {
+        let start = offset + start_rel;
+        let after = &xml[start + open_prefix.len()..];
+
+        let is_boundary = after.starts_with(|c: char| c == '>' || c == '/' || c.is_whitespace());
+        if !is_boundary {
+            // Matched a longer tag name sharing this prefix (e.g. "a:pPr"
+            // while looking for "a:p") - keep scanning past it.
+            offset = start + 1;
+            continue;
+        }
+
+        let Some(gt_rel) = after.find('>') else {
+            break;
+        };
+        let is_self_closing = after[..gt_rel].trim_end().ends_with('/');
+        let content_start = start + open_prefix.len() + gt_rel + 1;
+
+        if is_self_closing {
+            out.push("");
+            offset = content_start;
+            continue;
+        }
+
+        let Some(close_rel) = xml[content_start..].find(close.as_str()) else {
+            break;
+        };
+        let content_end = content_start + close_rel;
+        out.push(&xml[content_start..content_end]);
+        offset = content_end + close.len();
+    }
+
+    out
+}
+
+/// Decodes the five predefined XML entities. `&amp;` is decoded last so a
+/// literal escaped entity (`&amp;lt;`, meaning the text `&lt;`) round-trips
+/// instead of being double-unescaped.
+fn decode_entities(s: &str) -> String {
+    if !s.contains('&') {
+        return s.to_string();
+    }
+    s.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
+}
+
+/// One line per `para_tag` element, its `run_tag` runs concatenated - the
+/// shape both PowerPoint (`a:p`/`a:t`) and Word (`w:p`/`w:t`) use.
+fn paragraph_text(xml: &str, para_tag: &str, run_tag: &str) -> Vec<String> {
+    tag_spans(xml, para_tag)
+        .into_iter()
+        .map(|paragraph| {
+            tag_spans(paragraph, run_tag)
+                .into_iter()
+                .map(decode_entities)
+                .collect::<String>()
+        })
+        .collect()
+}
+
+/// One line per `tag` element, with no grouping - Excel's shared strings have
+/// no paragraph structure to group by.
+fn flat_tag_text(xml: &str, tag: &str) -> Vec<String> {
+    tag_spans(xml, tag).into_iter().map(decode_entities).collect()
+}
+
+/// Pulls a part's text out in document order, one entry per paragraph.
+///
+/// Returns an empty `Vec` for a part with no recognised text runs (including
+/// one whose bytes aren't valid UTF-8) rather than guessing - the UI says
+/// text comparison isn't available instead of showing nonsense.
+pub fn extract_text(entry_name: &str, bytes: &[u8]) -> Vec<String> {
+    let Ok(xml) = std::str::from_utf8(bytes) else {
+        return Vec::new();
+    };
+
+    if entry_name.starts_with("ppt/slides/slide") || entry_name.starts_with("ppt/notesSlides/") {
+        return paragraph_text(xml, "a:p", "a:t");
+    }
+
+    let is_word_text_part = entry_name == "word/document.xml"
+        || entry_name == "word/footnotes.xml"
+        || entry_name == "word/endnotes.xml"
+        || entry_name.starts_with("word/header")
+        || entry_name.starts_with("word/footer");
+    if is_word_text_part {
+        return paragraph_text(xml, "w:p", "w:t");
+    }
+
+    if entry_name == "xl/sharedStrings.xml" {
+        return flat_tag_text(xml, "t");
+    }
+
+    Vec::new()
+}
+
+/// One word-level piece of a changed line, for marking exactly which words
+/// differ rather than highlighting the whole line.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextSpan {
+    pub text: String,
+    pub changed: bool,
+}
+
+/// One row of a side-by-side text comparison.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextRow {
+    /// "same" | "added" | "removed" | "changed"
+    pub status: String,
+    pub left: Option<String>,
+    pub right: Option<String>,
+    /// Word-level pieces for a "changed" row, so the exact words that differ
+    /// can be marked. Empty for every other status.
+    pub left_spans: Vec<TextSpan>,
+    pub right_spans: Vec<TextSpan>,
+}
+
+/// A side-by-side comparison of a part's extracted text between two versions.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextComparison {
+    pub rows: Vec<TextRow>,
+    /// False when neither side yielded any text, so the UI can explain itself
+    /// instead of showing an empty table.
+    pub has_text: bool,
+}
+
+/// Word-level diff of one changed line, split into the spans that render
+/// either side of it.
+fn word_spans(old: &str, new: &str) -> (Vec<TextSpan>, Vec<TextSpan>) {
+    let mut left = Vec::new();
+    let mut right = Vec::new();
+
+    for change in similar::TextDiff::from_words(old, new).iter_all_changes() {
+        let text = change.value().to_string();
+        match change.tag() {
+            similar::ChangeTag::Equal => {
+                left.push(TextSpan { text: text.clone(), changed: false });
+                right.push(TextSpan { text, changed: false });
+            }
+            similar::ChangeTag::Delete => left.push(TextSpan { text, changed: true }),
+            similar::ChangeTag::Insert => right.push(TextSpan { text, changed: true }),
+        }
+    }
+
+    (left, right)
+}
+
+/// Aligns `older`'s and `newer`'s paragraphs and marks what changed.
+///
+/// Line alignment comes from `similar` (so a paragraph inserted earlier in
+/// the document doesn't make every paragraph after it look changed); a
+/// `Replace` op additionally gets a word-level diff on each paired line, so a
+/// one-word edit marks that word rather than the whole paragraph. When a
+/// replaced block's side lengths differ, the first `min(old_len, new_len)`
+/// lines are paired as "changed" and the rest fall back to "removed"/"added".
+pub fn diff_text(older: &[String], newer: &[String]) -> TextComparison {
+    if older.is_empty() && newer.is_empty() {
+        return TextComparison { rows: Vec::new(), has_text: false };
+    }
+
+    let older_refs: Vec<&str> = older.iter().map(String::as_str).collect();
+    let newer_refs: Vec<&str> = newer.iter().map(String::as_str).collect();
+    let diff = similar::TextDiff::from_slices(&older_refs, &newer_refs);
+
+    let same_row = |text: String| TextRow {
+        status: "same".to_string(),
+        left: Some(text.clone()),
+        right: Some(text),
+        left_spans: Vec::new(),
+        right_spans: Vec::new(),
+    };
+    let removed_row = |text: String| TextRow {
+        status: "removed".to_string(),
+        left: Some(text),
+        right: None,
+        left_spans: Vec::new(),
+        right_spans: Vec::new(),
+    };
+    let added_row = |text: String| TextRow {
+        status: "added".to_string(),
+        left: None,
+        right: Some(text),
+        left_spans: Vec::new(),
+        right_spans: Vec::new(),
+    };
+
+    let mut rows = Vec::new();
+    for op in diff.ops() {
+        match *op {
+            similar::DiffOp::Equal { old_index, len, .. } => {
+                rows.extend((0..len).map(|i| same_row(older[old_index + i].clone())));
+            }
+            similar::DiffOp::Delete { old_index, old_len, .. } => {
+                rows.extend((0..old_len).map(|i| removed_row(older[old_index + i].clone())));
+            }
+            similar::DiffOp::Insert { new_index, new_len, .. } => {
+                rows.extend((0..new_len).map(|i| added_row(newer[new_index + i].clone())));
+            }
+            similar::DiffOp::Replace { old_index, old_len, new_index, new_len } => {
+                let paired = old_len.min(new_len);
+                for i in 0..paired {
+                    let (old_line, new_line) = (&older[old_index + i], &newer[new_index + i]);
+                    let (left_spans, right_spans) = word_spans(old_line, new_line);
+                    rows.push(TextRow {
+                        status: "changed".to_string(),
+                        left: Some(old_line.clone()),
+                        right: Some(new_line.clone()),
+                        left_spans,
+                        right_spans,
+                    });
+                }
+                rows.extend(
+                    (paired..old_len).map(|i| removed_row(older[old_index + i].clone())),
+                );
+                rows.extend(
+                    (paired..new_len).map(|i| added_row(newer[new_index + i].clone())),
+                );
+            }
+        }
+    }
+
+    TextComparison { rows, has_text: true }
 }
 
 #[cfg(test)]
@@ -869,5 +1121,139 @@ mod tests {
             .read_to_end(&mut bytes)
             .unwrap();
         assert_eq!(bytes, b"<cp:revision>55</cp:revision>");
+    }
+
+    #[test]
+    fn extract_text_reads_a_two_paragraph_slide() {
+        let xml = r#"<p:sld><p:cSld><p:spTree>
+            <p:sp><p:txBody><a:p><a:r><a:t>Welcome</a:t></a:r></a:p></p:txBody></p:sp>
+            <p:sp><p:txBody><a:p><a:r><a:t>Thanks for coming</a:t></a:r></a:p></p:txBody></p:sp>
+        </p:spTree></p:cSld></p:sld>"#;
+
+        let lines = extract_text("ppt/slides/slide1.xml", xml.as_bytes());
+        assert_eq!(lines, vec!["Welcome", "Thanks for coming"]);
+    }
+
+    #[test]
+    fn extract_text_joins_a_word_run_split_mid_sentence() {
+        // Word splits a run on every formatting change, so the same sentence
+        // routinely arrives as several adjacent <w:t> runs.
+        let xml = r#"<w:document><w:body>
+            <w:p><w:r><w:t>Hello </w:t></w:r><w:r><w:t>world</w:t></w:r></w:p>
+        </w:body></w:document>"#;
+
+        let lines = extract_text("word/document.xml", xml.as_bytes());
+        assert_eq!(lines, vec!["Hello world"]);
+    }
+
+    #[test]
+    fn extract_text_decodes_entities() {
+        let xml = r#"<w:document><w:body>
+            <w:p><w:r><w:t>Tom &amp; Jerry &lt;3</w:t></w:r></w:p>
+        </w:body></w:document>"#;
+
+        let lines = extract_text("word/document.xml", xml.as_bytes());
+        assert_eq!(lines, vec!["Tom & Jerry <3"]);
+    }
+
+    #[test]
+    fn extract_text_reads_excel_shared_strings() {
+        let xml = r#"<sst><si><t>Revenue</t></si><si><t>Q1 2024</t></si></sst>"#;
+        let lines = extract_text("xl/sharedStrings.xml", xml.as_bytes());
+        assert_eq!(lines, vec!["Revenue", "Q1 2024"]);
+    }
+
+    #[test]
+    fn extract_text_is_empty_for_an_unrecognised_part() {
+        assert_eq!(extract_text("ppt/theme/theme1.xml", b"<a:theme/>"), Vec::<String>::new());
+        assert_eq!(extract_text("docProps/core.xml", b"<cp:core/>"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn extract_text_ignores_run_properties_that_share_the_run_tags_prefix() {
+        // "a:rPr" (run properties) must never be mistaken for "a:r".
+        let xml = r#"<a:p><a:r><a:rPr sz="1800"/><a:t>Sized text</a:t></a:r></a:p>"#;
+        assert_eq!(extract_text("ppt/slides/slide2.xml", xml.as_bytes()), vec!["Sized text"]);
+    }
+
+    fn row(status: &str, left: Option<&str>, right: Option<&str>) -> TextRow {
+        TextRow {
+            status: status.to_string(),
+            left: left.map(str::to_string),
+            right: right.map(str::to_string),
+            left_spans: Vec::new(),
+            right_spans: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn diff_text_marks_an_unchanged_paragraph_as_same() {
+        let older = vec!["Welcome".to_string()];
+        let newer = vec!["Welcome".to_string()];
+
+        let result = diff_text(&older, &newer);
+        assert!(result.has_text);
+        assert_eq!(result.rows, vec![row("same", Some("Welcome"), Some("Welcome"))]);
+    }
+
+    #[test]
+    fn diff_text_isolates_the_one_word_that_changed() {
+        let older = vec!["The quick brown fox".to_string()];
+        let newer = vec!["The quick red fox".to_string()];
+
+        let result = diff_text(&older, &newer);
+        assert_eq!(result.rows.len(), 1);
+        let changed = &result.rows[0];
+        assert_eq!(changed.status, "changed");
+
+        // Only "brown"/"red" are marked - not the whole line.
+        let changed_left: Vec<&str> = changed
+            .left_spans
+            .iter()
+            .filter(|s| s.changed)
+            .map(|s| s.text.as_str())
+            .collect();
+        let changed_right: Vec<&str> = changed
+            .right_spans
+            .iter()
+            .filter(|s| s.changed)
+            .map(|s| s.text.as_str())
+            .collect();
+        assert_eq!(changed_left, vec!["brown"]);
+        assert_eq!(changed_right, vec!["red"]);
+
+        let unchanged_left_words = changed.left_spans.iter().filter(|s| !s.changed).count();
+        assert!(unchanged_left_words > 0, "the rest of the line must stay unmarked");
+    }
+
+    #[test]
+    fn diff_text_marks_an_added_paragraph() {
+        let older = vec!["Intro".to_string()];
+        let newer = vec!["Intro".to_string(), "New section".to_string()];
+
+        let result = diff_text(&older, &newer);
+        assert_eq!(
+            result.rows,
+            vec![row("same", Some("Intro"), Some("Intro")), row("added", None, Some("New section"))]
+        );
+    }
+
+    #[test]
+    fn diff_text_marks_a_removed_paragraph() {
+        let older = vec!["Intro".to_string(), "Old section".to_string()];
+        let newer = vec!["Intro".to_string()];
+
+        let result = diff_text(&older, &newer);
+        assert_eq!(
+            result.rows,
+            vec![row("same", Some("Intro"), Some("Intro")), row("removed", Some("Old section"), None)]
+        );
+    }
+
+    #[test]
+    fn diff_text_reports_no_text_when_both_sides_are_empty() {
+        let result = diff_text(&[], &[]);
+        assert!(!result.has_text);
+        assert!(result.rows.is_empty());
     }
 }

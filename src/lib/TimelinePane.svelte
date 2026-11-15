@@ -1,10 +1,18 @@
 <script lang="ts">
-  import type { CompareResult, FileStats, FileWithLastChanged, Loadable, Revision } from "./types";
+  import type {
+    CompareResult,
+    FileStats,
+    FileWithLastChanged,
+    Loadable,
+    Revision,
+    TextComparison,
+  } from "./types";
   import TimelineRow from "./TimelineRow.svelte";
   import { groupIntoSessions } from "./sessions";
   import { findGaps, sessionTickCount } from "./spine";
   import { formatFileStats, formatRelativeTime, formatSessionSpan } from "./format";
-  import { summarizeChanges } from "./partnames";
+  import { summarizeChanges, supportsTextCompare } from "./partnames";
+  import { collapseUnchanged } from "./textcompare";
 
   let {
     selectedFile,
@@ -14,6 +22,7 @@
     onSetMilestone,
     onSaveCopy,
     onCompare,
+    onComparePartText,
   }: {
     selectedFile: FileWithLastChanged | null;
     revisions: Loadable<Revision[]> | null;
@@ -22,6 +31,7 @@
     onSetMilestone: (revisionId: number, label: string) => Promise<void>;
     onSaveCopy: (revisionId: number) => Promise<string>;
     onCompare: (olderId: number, newerId: number) => Promise<CompareResult>;
+    onComparePartText: (olderId: number, newerId: number, entryName: string) => Promise<TextComparison>;
   } = $props();
 
   let groups = $derived(
@@ -80,11 +90,13 @@
   type PaneMode =
     | { kind: "list" }
     | { kind: "picking"; firstId: number }
-    | { kind: "comparing"; olderId: number; newerId: number };
+    | { kind: "comparing"; olderId: number; newerId: number }
+    | { kind: "viewingText"; olderId: number; newerId: number; entryName: string; label: string };
 
   let mode = $state<PaneMode>({ kind: "list" });
   let pickError = $state<string | null>(null);
   let compareResult = $state<Loadable<CompareResult> | null>(null);
+  let textResult = $state<Loadable<TextComparison> | null>(null);
 
   function findRevision(id: number): Revision | undefined {
     return revisions && revisions.status === "loaded"
@@ -114,6 +126,7 @@
       mode = { kind: "list" };
       pickError = null;
       compareResult = null;
+      textResult = null;
     }
   });
 
@@ -164,6 +177,32 @@
   function backToList() {
     mode = { kind: "list" };
     compareResult = null;
+    textResult = null;
+  }
+
+  // Opens the side-by-side text view for one changed part. Only reachable
+  // from "comparing", so the two version ids it needs are already in hand.
+  async function openPartText(entryName: string, label: string) {
+    if (mode.kind !== "comparing") return;
+    const { olderId, newerId } = mode;
+    mode = { kind: "viewingText", olderId, newerId, entryName, label };
+    textResult = { status: "loading" };
+    try {
+      textResult = { status: "loaded", data: await onComparePartText(olderId, newerId, entryName) };
+    } catch (e) {
+      textResult = {
+        status: "error",
+        message: e instanceof Error ? e.message : "Couldn't load that comparison.",
+      };
+    }
+  }
+
+  // Back to the list of changed parts, not all the way to the timeline -
+  // the compare result backing that list is still in `compareResult`.
+  function backToChangedParts() {
+    if (mode.kind !== "viewingText") return;
+    mode = { kind: "comparing", olderId: mode.olderId, newerId: mode.newerId };
+    textResult = null;
   }
 
   async function startCompare(aId: number, bId: number) {
@@ -280,7 +319,17 @@
               <div class="change-group">
                 <h3>Changed</h3>
                 <ul>
-                  {#each summary.changed as label}<li>{label}</li>{/each}
+                  {#each summary.changed as item}
+                    <li>
+                      {#if supportsTextCompare(item.entryName)}
+                        <button class="plain part-link" onclick={() => openPartText(item.entryName, item.label)}>
+                          {item.label}
+                        </button>
+                      {:else}
+                        {item.label}
+                      {/if}
+                    </li>
+                  {/each}
                 </ul>
               </div>
             {/if}
@@ -288,7 +337,17 @@
               <div class="change-group">
                 <h3>Added</h3>
                 <ul>
-                  {#each summary.added as label}<li>{label}</li>{/each}
+                  {#each summary.added as item}
+                    <li>
+                      {#if supportsTextCompare(item.entryName)}
+                        <button class="plain part-link" onclick={() => openPartText(item.entryName, item.label)}>
+                          {item.label}
+                        </button>
+                      {:else}
+                        {item.label}
+                      {/if}
+                    </li>
+                  {/each}
                 </ul>
               </div>
             {/if}
@@ -296,7 +355,17 @@
               <div class="change-group">
                 <h3>Removed</h3>
                 <ul>
-                  {#each summary.removed as label}<li>{label}</li>{/each}
+                  {#each summary.removed as item}
+                    <li>
+                      {#if supportsTextCompare(item.entryName)}
+                        <button class="plain part-link" onclick={() => openPartText(item.entryName, item.label)}>
+                          {item.label}
+                        </button>
+                      {:else}
+                        {item.label}
+                      {/if}
+                    </li>
+                  {/each}
                 </ul>
               </div>
             {/if}
@@ -309,6 +378,72 @@
               · {summary.internalCount} internal change{summary.internalCount === 1 ? "" : "s"} hidden
             {/if}
           </p>
+        {/if}
+      </div>
+    {:else if mode.kind === "viewingText"}
+      {@const older = findRevision(mode.olderId)}
+      {@const newer = findRevision(mode.newerId)}
+      <div class="text-compare pad">
+        <p class="compare-heading">{mode.label}</p>
+        {#if textResult?.status === "loading"}
+          <p class="hint">Loading…</p>
+        {:else if textResult?.status === "error"}
+          <p class="error-text">{textResult.message}</p>
+        {:else if textResult?.status === "loaded"}
+          {#if !textResult.data.hasText}
+            <p class="hint">Text comparison isn't available for this part.</p>
+          {:else}
+            <div class="text-columns">
+              <div class="column-header">{older ? versionLabel(older) : "Older version"}</div>
+              <div class="column-header">{newer ? versionLabel(newer) : "Newer version"}</div>
+              {#each collapseUnchanged(textResult.data.rows) as item}
+                {#if item.kind === "collapsed"}
+                  <div class="collapsed-marker">
+                    {item.count} unchanged line{item.count === 1 ? "" : "s"} hidden
+                  </div>
+                {:else if item.row.status === "same"}
+                  <div class="full-row same-row">{item.row.left}</div>
+                {:else}
+                  <div
+                    class="text-cell left-cell"
+                    class:removed={item.row.status === "removed"}
+                    class:empty={item.row.left === null}
+                  >
+                    {#if item.row.left !== null}
+                      {#if item.row.status === "removed"}
+                        <span class="marker" aria-hidden="true">−&nbsp;</span>
+                      {/if}
+                      {#if item.row.leftSpans.length > 0}
+                        {#each item.row.leftSpans as span}<span class:diff-word-removed={span.changed}
+                            >{span.text}</span
+                          >{/each}
+                      {:else}
+                        {item.row.left}
+                      {/if}
+                    {/if}
+                  </div>
+                  <div
+                    class="text-cell right-cell"
+                    class:added={item.row.status === "added"}
+                    class:empty={item.row.right === null}
+                  >
+                    {#if item.row.right !== null}
+                      {#if item.row.status === "added"}
+                        <span class="marker" aria-hidden="true">+&nbsp;</span>
+                      {/if}
+                      {#if item.row.rightSpans.length > 0}
+                        {#each item.row.rightSpans as span}<span class:diff-word-added={span.changed}
+                            >{span.text}</span
+                          >{/each}
+                      {:else}
+                        {item.row.right}
+                      {/if}
+                    {/if}
+                  </div>
+                {/if}
+              {/each}
+            </div>
+          {/if}
         {/if}
       </div>
     {:else if !selectedFile || !revisions}
@@ -388,7 +523,9 @@
   </div>
 
   <div class="actions">
-    {#if mode.kind === "comparing"}
+    {#if mode.kind === "viewingText"}
+      <button onclick={backToChangedParts}>Back to changed parts</button>
+    {:else if mode.kind === "comparing"}
       <button onclick={backToList}>Back to versions</button>
     {:else if mode.kind === "picking"}
       <button class="plain" onclick={cancelPicking}>Cancel</button>
@@ -487,6 +624,117 @@
 
   .compare-footer {
     margin-top: 6px;
+  }
+
+  /* A changed/added/removed part that has text to show - styled as a link so
+     it reads as clickable without a full button bevel in a list of names. */
+  .part-link {
+    font-size: 13px;
+    text-decoration: underline;
+    color: var(--ink);
+  }
+
+  .text-compare {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .text-columns {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    column-gap: 10px;
+    align-items: start;
+  }
+
+  .column-header {
+    position: sticky;
+    top: 0;
+    background: var(--well);
+    font-size: 11px;
+    font-weight: bold;
+    padding: 2px 10px 4px;
+    border-bottom: 1px solid var(--edge);
+  }
+
+  /* Spans both columns: an unchanged line (shown once, not duplicated per
+     side) and the "N lines hidden" marker both read better full-width. */
+  .full-row {
+    grid-column: 1 / -1;
+  }
+
+  .same-row {
+    padding: 1px 10px;
+    font-size: 13px;
+    line-height: 1.5;
+    opacity: 0.68;
+  }
+
+  .collapsed-marker {
+    padding: 3px 0;
+    text-align: center;
+    font-size: 11px;
+    font-style: italic;
+    opacity: 0.6;
+  }
+
+  .text-cell {
+    padding: 1px 10px;
+    font-size: 13px;
+    line-height: 1.5;
+    min-height: 1.5em;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+  }
+
+  .text-cell.removed {
+    background: var(--diff-remove-bg);
+  }
+
+  .text-cell.added {
+    background: var(--diff-add-bg);
+  }
+
+  /* The marker is the colour-blind-safe signal a whole line was added or
+     removed, independent of the background tint. */
+  .text-cell.removed .marker {
+    color: var(--diff-remove);
+    font-weight: bold;
+  }
+
+  .text-cell.added .marker {
+    color: var(--diff-add);
+    font-weight: bold;
+  }
+
+  /* Word-level marks inside a "changed" row. Colour plus a second, non-colour
+     channel (strikethrough on the old word, underline on the new one) so the
+     exact words that differ are legible without relying on hue. */
+  .diff-word-removed {
+    background: var(--diff-remove-bg);
+    color: var(--diff-remove);
+    text-decoration: line-through;
+  }
+
+  .diff-word-added {
+    background: var(--diff-add-bg);
+    color: var(--diff-add);
+    text-decoration: underline;
+    text-decoration-thickness: 2px;
+  }
+
+  /* Below this, two columns squeeze into unreadable slivers - stack instead,
+     older line directly above its newer counterpart. The empty half of an
+     added/removed row (nothing happened on that side) is dropped rather than
+     left as a blank line, since there's no second column left to align with. */
+  @media (max-width: 760px) {
+    .text-columns {
+      grid-template-columns: 1fr;
+    }
+
+    .text-cell.empty {
+      display: none;
+    }
   }
 
   .well {

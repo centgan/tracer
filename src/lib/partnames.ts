@@ -57,13 +57,17 @@ export function describeEntry(entryName: string): PartLabel {
   return { kind: "internal" };
 }
 
+// A named change, carrying both what to show (label) and what to ask the
+// backend for if the user clicks it (entryName, the raw zip path).
+export type NamedChange = { entryName: string; label: string };
+
 // A compare_revisions result, sorted into what a user should actually read:
 // friendly labels grouped by status, with internal/bookkeeping entries
 // reduced to a count instead of named individually.
 export type ChangeSummary = {
-  changed: string[];
-  added: string[];
-  removed: string[];
+  changed: NamedChange[];
+  added: NamedChange[];
+  removed: NamedChange[];
   internalCount: number;
 };
 
@@ -76,7 +80,24 @@ export function summarizeChanges(changes: PartChange[]): ChangeSummary {
       continue;
     }
     const bucket = change.status === "changed" ? summary.changed : change.status === "added" ? summary.added : summary.removed;
-    bucket.push(described.label);
+    bucket.push({ entryName: change.entryName, label: described.label });
   }
   return summary;
+}
+
+// Mirrors the whitelist src-tauri/src/engine.rs's extract_text recognises.
+// Kept in lockstep deliberately: a part outside it is one the backend can
+// never pull text out of (a picture, a theme, a worksheet's cell grid), so
+// there's no point round-tripping to compare_part_text just to be told so -
+// it shouldn't even look clickable.
+export function supportsTextCompare(entryName: string): boolean {
+  if (entryName.startsWith("ppt/slides/slide")) return true;
+  if (entryName.startsWith("ppt/notesSlides/")) return true;
+  if (entryName === "word/document.xml") return true;
+  if (entryName === "word/footnotes.xml") return true;
+  if (entryName === "word/endnotes.xml") return true;
+  if (entryName.startsWith("word/header")) return true;
+  if (entryName.startsWith("word/footer")) return true;
+  if (entryName === "xl/sharedStrings.xml") return true;
+  return false;
 }

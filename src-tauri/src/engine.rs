@@ -22,9 +22,29 @@ use crate::db::{ObjectRecord, PartRecord};
 const RAW_PREFIX: u8 = 0;
 const ZLIB_PREFIX: u8 = 1;
 
+/// Entry-name prefixes left out of `manifest_hash` because Office rewrites
+/// them on every save regardless of whether the user changed anything (the
+/// revision counter, the modified timestamp, total editing time), which would
+/// otherwise make the change-detection guard in `watcher::process_path` fire
+/// on every save and record a version with no real content change. Extend this
+/// list only with other parts proven to be pure save-metadata - excluding a
+/// real content part would hide an actual edit, which is worse than recording
+/// an extra version.
+const MANIFEST_HASH_EXCLUDED_PREFIXES: &[&str] = &["docProps/"];
+
+fn is_excluded_from_manifest_hash(entry_name: &str) -> bool {
+    MANIFEST_HASH_EXCLUDED_PREFIXES
+        .iter()
+        .any(|prefix| entry_name.starts_with(prefix))
+}
+
 pub struct Snapshot {
     pub parts: Vec<PartRecord>,
     pub objects: Vec<ObjectRecord>,
+    /// Identifies this revision's content for change detection, not restore
+    /// (`parts` does that). Covers only parts outside
+    /// `MANIFEST_HASH_EXCLUDED_PREFIXES`, so a save that only touched
+    /// Office's own save-metadata hashes the same as the save before it.
     pub manifest_hash: String,
     pub byte_size: i64,
 }
@@ -35,8 +55,9 @@ pub struct Snapshot {
 /// hash; `parts` records how to reassemble the archive, `objects` describes
 /// every distinct blob this revision references (whether or not this call was
 /// the one that wrote it, so the DB's `objects` table can always satisfy
-/// `revision_parts`' foreign key), and `manifest_hash` identifies this exact
-/// set of parts so callers can skip storing a revision that didn't change.
+/// `revision_parts`' foreign key), and `manifest_hash` identifies this
+/// revision's content parts (see `MANIFEST_HASH_EXCLUDED_PREFIXES`) so callers
+/// can skip storing a revision whose content didn't change.
 pub fn snapshot(path: &Path, objects_root: &Path) -> Result<Snapshot> {
     let byte_size = fs::metadata(path)
         .with_context(|| format!("reading metadata for {}", path.display()))?
@@ -76,12 +97,17 @@ pub fn snapshot(path: &Path, objects_root: &Path) -> Result<Snapshot> {
             objects.push(record);
         }
 
-        manifest.update(entry_order.to_string().as_bytes());
-        manifest.update(b"\0");
-        manifest.update(name.as_bytes());
-        manifest.update(b"\0");
-        manifest.update(object_hash.as_bytes());
-        manifest.update(b"\n");
+        // Deliberately not hashing entry_order: it counts every part, excluded
+        // ones included, so a single new docProps entry would shift the index of
+        // every content part and change this hash without any content changing -
+        // the exact false version this exclusion exists to prevent. Feeding the
+        // parts in sequence already encodes their order.
+        if !is_excluded_from_manifest_hash(&name) {
+            manifest.update(name.as_bytes());
+            manifest.update(b"\0");
+            manifest.update(object_hash.as_bytes());
+            manifest.update(b"\n");
+        }
 
         parts.push(PartRecord {
             entry_order,
@@ -338,6 +364,70 @@ mod tests {
 
         writer.start_file("word/media/dup.bin", stored).unwrap();
         writer.write_all(b"shared-bytes").unwrap();
+
+        writer.finish().unwrap();
+    }
+
+    /// Like `build_test_zip`, but with `docProps/core.xml` and
+    /// `word/document.xml` contents overridable, to test `manifest_hash`'s
+    /// sensitivity to each independently.
+    /// Office adding a metadata part it didn't write before must not look like
+    /// a content change. It shifts every later part's `entry_order`, which is
+    /// why the manifest hash doesn't include that index.
+    #[test]
+    fn an_extra_metadata_part_does_not_change_manifest_hash() {
+        let src_dir = tempdir().unwrap();
+        let objects_root = tempdir().unwrap();
+
+        let without = src_dir.path().join("without.docx");
+        build_test_zip_with(&without, b"<core rev='1'/>", b"<document>same</document>");
+
+        // Same content, plus one more docProps entry ahead of the content part.
+        let with = src_dir.path().join("with.docx");
+        {
+            let file = File::create(&with).unwrap();
+            let mut writer = ZipWriter::new(file);
+            let stored = SimpleFileOptions::DEFAULT.compression_method(CompressionMethod::Stored);
+            let deflated =
+                SimpleFileOptions::DEFAULT.compression_method(CompressionMethod::Deflated);
+
+            writer.start_file("[Content_Types].xml", deflated).unwrap();
+            writer.write_all(b"<Types/>").unwrap();
+            writer.start_file("docProps/core.xml", stored).unwrap();
+            writer.write_all(b"<core rev='1'/>").unwrap();
+            writer.start_file("docProps/custom.xml", stored).unwrap();
+            writer.write_all(b"<custom/>").unwrap();
+            writer.start_file("word/document.xml", deflated).unwrap();
+            writer.write_all(b"<document>same</document>").unwrap();
+            writer.finish().unwrap();
+        }
+
+        let a = snapshot(&without, objects_root.path()).unwrap();
+        let b = snapshot(&with, objects_root.path()).unwrap();
+
+        assert_eq!(
+            a.manifest_hash, b.manifest_hash,
+            "an added metadata part shifted a content part's index and was mistaken for an edit"
+        );
+        // The extra part is still stored and restorable - only the hash ignores it.
+        assert_eq!(a.parts.len() + 1, b.parts.len());
+    }
+
+    fn build_test_zip_with(path: &Path, core_xml: &[u8], document_xml: &[u8]) {
+        let file = File::create(path).unwrap();
+        let mut writer = ZipWriter::new(file);
+
+        let stored = SimpleFileOptions::DEFAULT.compression_method(CompressionMethod::Stored);
+        let deflated = SimpleFileOptions::DEFAULT.compression_method(CompressionMethod::Deflated);
+
+        writer.start_file("[Content_Types].xml", deflated).unwrap();
+        writer.write_all(b"<Types/>").unwrap();
+
+        writer.start_file("docProps/core.xml", stored).unwrap();
+        writer.write_all(core_xml).unwrap();
+
+        writer.start_file("word/document.xml", deflated).unwrap();
+        writer.write_all(document_xml).unwrap();
 
         writer.finish().unwrap();
     }
@@ -652,5 +742,79 @@ mod tests {
         let dest = src_dir.path().join("restored.zip");
         let result = restore(&snap.parts, objects_root.path(), &dest);
         assert!(result.is_err());
+    }
+
+    /// The headline regression: Office rewrites `docProps/core.xml` (revision
+    /// counter, modified timestamp) on every save even when the user changed
+    /// nothing, which must not look like a content change.
+    #[test]
+    fn metadata_only_change_does_not_change_manifest_hash() {
+        let src_dir = tempdir().unwrap();
+        let objects_root = tempdir().unwrap();
+
+        let a = src_dir.path().join("a.zip");
+        let b = src_dir.path().join("b.zip");
+        build_test_zip_with(&a, b"<cp:revision>54</cp:revision>", b"<document/>");
+        build_test_zip_with(&b, b"<cp:revision>55</cp:revision>", b"<document/>");
+
+        let snap_a = snapshot(&a, objects_root.path()).unwrap();
+        let snap_b = snapshot(&b, objects_root.path()).unwrap();
+
+        assert_eq!(snap_a.manifest_hash, snap_b.manifest_hash);
+
+        let core_hash = |snap: &Snapshot| {
+            snap.parts
+                .iter()
+                .find(|p| p.entry_name == "docProps/core.xml")
+                .unwrap()
+                .object_hash
+                .clone()
+        };
+        assert_ne!(
+            core_hash(&snap_a),
+            core_hash(&snap_b),
+            "the metadata really differed and really was stored, just not hashed into manifest_hash"
+        );
+    }
+
+    #[test]
+    fn content_part_change_does_change_manifest_hash() {
+        let src_dir = tempdir().unwrap();
+        let objects_root = tempdir().unwrap();
+
+        let a = src_dir.path().join("a.zip");
+        let b = src_dir.path().join("b.zip");
+        build_test_zip_with(&a, b"<cp:revision>54</cp:revision>", b"<document>old</document>");
+        build_test_zip_with(&b, b"<cp:revision>54</cp:revision>", b"<document>new</document>");
+
+        let snap_a = snapshot(&a, objects_root.path()).unwrap();
+        let snap_b = snapshot(&b, objects_root.path()).unwrap();
+
+        assert_ne!(snap_a.manifest_hash, snap_b.manifest_hash);
+    }
+
+    /// Narrowing the hash must not narrow storage: the excluded part still
+    /// restores as whatever was actually saved, not a prior version.
+    #[test]
+    fn metadata_only_change_still_restores_its_own_content() {
+        let src_dir = tempdir().unwrap();
+        let objects_root = tempdir().unwrap();
+
+        let src = src_dir.path().join("src.zip");
+        build_test_zip_with(&src, b"<cp:revision>55</cp:revision>", b"<document/>");
+
+        let snap = snapshot(&src, objects_root.path()).unwrap();
+
+        let dest = src_dir.path().join("restored.zip");
+        restore(&snap.parts, objects_root.path(), &dest).unwrap();
+
+        let mut restored = ZipArchive::new(File::open(&dest).unwrap()).unwrap();
+        let mut bytes = Vec::new();
+        restored
+            .by_name("docProps/core.xml")
+            .unwrap()
+            .read_to_end(&mut bytes)
+            .unwrap();
+        assert_eq!(bytes, b"<cp:revision>55</cp:revision>");
     }
 }

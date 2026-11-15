@@ -51,94 +51,92 @@
     <h2>{selectedFile ? selectedFile.relativePath : "Timeline"}</h2>
   </div>
 
-  {#if !selectedFile || !revisions}
-    <p class="hint">Pick a file in the middle column to see its versions.</p>
-  {:else if revisions.status === "loading"}
-    <p class="hint">Loading versions…</p>
-  {:else if revisions.status === "error"}
-    <p class="banner error">{revisions.message}</p>
-  {:else if revisions.data.length === 0}
-    <p class="hint">No versions yet. Save this file to start its history.</p>
-  {:else}
-    <ul class="rows">
-      {#each groups as group (group.id)}
-        {#if group.revisions.length === 1}
-          <TimelineRow
-            revision={group.revisions[0]}
-            justArrived={group.revisions[0].id === justArrivedId}
-            {onSetMilestone}
-            {onSaveCopy}
-          />
-        {:else}
-          <li class="session">
-            <button
-              class="session-toggle"
-              aria-expanded={isOpen(group)}
-              onclick={() => toggle(group)}
-            >
-              <span class="chevron" class:open={isOpen(group)}>▸</span>
-              <span class="session-summary">
-                {formatSessionSpan(
-                  group.revisions[group.revisions.length - 1].timestamp,
-                  group.revisions[0].timestamp,
-                )}
-                · {group.revisions.length} versions
-              </span>
-            </button>
-            {#if isOpen(group)}
-              <ul class="rows nested">
-                {#each group.revisions as revision (revision.id)}
-                  <TimelineRow
-                    {revision}
-                    justArrived={revision.id === justArrivedId}
-                    {onSetMilestone}
-                    {onSaveCopy}
-                  />
-                {/each}
-              </ul>
-            {/if}
-          </li>
-        {/if}
-      {/each}
-    </ul>
-  {/if}
+  <div class="well">
+    {#if !selectedFile || !revisions}
+      <p class="hint pad">Pick a file in the middle column to see its versions.</p>
+    {:else if revisions.status === "loading"}
+      <p class="hint pad">Loading versions…</p>
+    {:else if revisions.status === "error"}
+      <p class="error-text pad">{revisions.message}</p>
+    {:else if revisions.data.length === 0}
+      <p class="hint pad">No versions yet. Save this file to start its history.</p>
+    {:else}
+      <ul class="rows">
+        {#each groups as group (group.id)}
+          {#if group.revisions.length === 1}
+            <TimelineRow
+              revision={group.revisions[0]}
+              justArrived={group.revisions[0].id === justArrivedId}
+              {onSetMilestone}
+              {onSaveCopy}
+            />
+          {:else}
+            <li class="session">
+              <button
+                class="session-toggle"
+                aria-expanded={isOpen(group)}
+                onclick={() => toggle(group)}
+              >
+                <span class="chevron" class:open={isOpen(group)}>▸</span>
+                <span class="session-span"
+                  >{formatSessionSpan(
+                    group.revisions[group.revisions.length - 1].timestamp,
+                    group.revisions[0].timestamp,
+                  )}</span
+                >
+                <span class="session-count">{group.revisions.length} saves</span>
+              </button>
+              {#if isOpen(group)}
+                <ul class="rows nested">
+                  {#each group.revisions as revision (revision.id)}
+                    <TimelineRow
+                      {revision}
+                      justArrived={revision.id === justArrivedId}
+                      {onSetMilestone}
+                      {onSaveCopy}
+                    />
+                  {/each}
+                </ul>
+              {/if}
+            </li>
+          {/if}
+        {/each}
+      </ul>
+    {/if}
+  </div>
 </section>
 
 <style>
   .pane {
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
-    padding: 1rem;
-    overflow-y: auto;
+    gap: 6px;
+    min-height: 0;
+    height: 100%;
   }
 
   .pane-header h2 {
-    margin: 0;
-    font-size: 1rem;
+    font-size: 11px;
+    font-weight: bold;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .hint {
-    color: var(--muted);
-    font-size: 0.9rem;
-    line-height: 1.4;
+  .pad {
+    padding: 8px;
+  }
+
+  .well {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
   }
 
   .rows {
     list-style: none;
     margin: 0;
     padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-
-  .banner.error {
-    color: var(--error);
-    font-size: 0.9rem;
   }
 
   .session {
@@ -147,37 +145,57 @@
   }
 
   .session-toggle {
+    width: 100%;
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    padding: 0.6rem 0.85rem;
-    border-radius: 8px;
-    border: 1px solid var(--border);
+    gap: 8px;
+    min-height: 24px;
+    padding: 3px 8px;
     background: none;
-    color: inherit;
+    border: none;
+    box-shadow: none;
+    border-radius: 0;
+    color: var(--ink);
     font: inherit;
+    font-size: 11px;
+    font-weight: bold;
     text-align: left;
-    cursor: pointer;
+  }
+
+  .session-toggle:hover {
+    background: var(--face-hover);
   }
 
   .chevron {
     display: inline-block;
-    color: var(--muted);
-    transition: transform 0.15s ease;
+    flex: none;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .chevron {
+      transition: transform 0.12s ease;
+    }
   }
 
   .chevron.open {
     transform: rotate(90deg);
   }
 
-  .session-summary {
-    font-size: 0.9rem;
-    color: var(--muted);
+  .session-span {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .session-count {
+    flex: none;
+    opacity: 0.72;
+    font-weight: normal;
   }
 
   .rows.nested {
-    margin-top: 0.5rem;
-    padding-left: 1.1rem;
-    border-left: 1px solid var(--border);
+    padding-left: 16px;
   }
 </style>

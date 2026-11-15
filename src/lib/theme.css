@@ -1,0 +1,159 @@
+/* Platinum/Windows-95 token sheet. DESIGN.md owns the values; this file is
+   the single place they're declared so bevels aren't hand-rolled per
+   component. */
+
+:root {
+  --chrome: #d6d2ca;
+  --face: #cac5bc;
+  --face-hover: #bdb8ae;
+  --well: #f2f0ec;
+  --light: #ffffff;
+  --face-light: #e4e0d8;
+  --shade: #817d75;
+  --face-dark: #a6a199;
+  --edge: #2b2925;
+  --ink: #17150f;
+  --select: #000080;
+  --live: #007a3d;
+  --warn: #8a5a00;
+  /* Transient "just arrived" tint. Same hue as --live - it's a live-update
+     cue, not a fourth color. */
+  --flash: rgb(0 122 61 / 16%);
+
+  --ui: Geneva, "MS Sans Serif", Verdana, sans-serif;
+  --data: Monaco, "Courier New", monospace;
+
+  font-family: var(--ui);
+  font-size: 13px;
+  line-height: 1.4;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --chrome: #39352f;
+    --face: #433e37;
+    --face-hover: #4d473f;
+    --well: #211f1b;
+    --light: #56514a;
+    --face-light: #4a453e;
+    --shade: #15130f;
+    --face-dark: #26231e;
+    --edge: #0b0a08;
+    --ink: #e8e4da;
+    --live: #2fbf6e;
+    --warn: #caa23a;
+    --flash: rgb(47 191 110 / 20%);
+    color-scheme: dark;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--chrome);
+  color: var(--ink);
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+/* Raised: anything pressable (buttons). */
+button {
+  appearance: none;
+  background: var(--face);
+  border: 1px solid var(--edge);
+  box-shadow:
+    inset 1px 1px 0 var(--light),
+    inset 2px 2px 0 var(--face-light),
+    inset -1px -1px 0 var(--shade),
+    inset -2px -2px 0 var(--face-dark);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  min-height: 24px;
+  padding: 3px 12px;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: var(--face-hover);
+}
+
+button:active:not(:disabled) {
+  box-shadow:
+    inset 1px 1px 0 var(--shade),
+    inset 2px 2px 0 var(--face-dark);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* A button stripped of its bevel, for inline/quiet actions (naming a
+   version, dismissing a row). Still a real button: focusable, 24px tall. */
+button.plain {
+  background: none;
+  border: 1px solid transparent;
+  box-shadow: none;
+  min-height: auto;
+  padding: 2px 4px;
+}
+
+button.plain:hover:not(:disabled) {
+  background: var(--face-hover);
+}
+
+input[type="text"],
+input[type="email"] {
+  font: inherit;
+  color: var(--ink);
+  background: var(--well);
+  border: 1px solid var(--edge);
+  box-shadow:
+    inset 1px 1px 0 var(--shade),
+    inset 2px 2px 0 var(--face-dark);
+  padding: 3px 6px;
+  min-height: 24px;
+}
+
+/* Sunken well: list panes, text fields. */
+.well {
+  background: var(--well);
+  border: 1px solid var(--edge);
+  box-shadow:
+    inset 1px 1px 0 var(--shade),
+    inset 2px 2px 0 var(--face-dark),
+    inset -1px -1px 0 var(--light);
+}
+
+.hint {
+  color: var(--ink);
+  opacity: 0.72;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.error-text {
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: bold;
+}
+
+.error-text::before {
+  content: "\26a0 ";
+}
+
+:focus-visible {
+  outline: 2px solid var(--select);
+  outline-offset: 1px;
+}
+</content>

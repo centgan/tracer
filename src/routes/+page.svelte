@@ -1,4 +1,5 @@
 <script lang="ts">
+  import "$lib/theme.css";
   import { open } from "@tauri-apps/plugin-dialog";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import * as api from "$lib/api";
@@ -7,6 +8,9 @@
   import FilesPane from "$lib/FilesPane.svelte";
   import TimelinePane from "$lib/TimelinePane.svelte";
   import StatusBar from "$lib/StatusBar.svelte";
+  import SettingsDialog from "$lib/SettingsDialog.svelte";
+
+  let settingsOpen = $state(false);
 
   function errorMessage(e: unknown): string {
     return e instanceof Error ? e.message : String(e);
@@ -159,13 +163,12 @@
   });
 </script>
 
-<main>
-  <header class="app-header">
-    <h1>Tracer</h1>
-    <p class="tagline">Every save, kept. Nothing to configure.</p>
-  </header>
+<main class="app">
+  <div class="title-bar">
+    <span class="title-bar-text">Tracer</span>
+  </div>
 
-  <StatusBar {watchedCount} />
+  <StatusBar {watchedCount} onOpenSettings={() => (settingsOpen = true)} />
 
   <div class="panes">
     <FoldersPane
@@ -188,132 +191,69 @@
   </div>
 
   <footer class="app-footer">
-    Tracer keeps versions of your files, not a backup of your folder. If the
-    folder itself is lost, its history goes with it.
+    Tracer versions files, not the folder. Lose the folder and its history goes too.
   </footer>
 </main>
 
+<SettingsDialog open={settingsOpen} onClose={() => (settingsOpen = false)} {watchedCount} />
+
 <style>
-  :global(:root) {
-    --bg: #f6f6f6;
-    --surface: #ffffff;
-    --surface-hover: #eef0f3;
-    --border: #e0e0e0;
-    --text: #0f0f0f;
-    --muted: #6b6b6b;
-    --accent: #396cd8;
-    --accent-soft: #e8f0ff;
-    --on-accent: #ffffff;
-    --error: #c0392b;
-    --warn: #9a6b1f;
-    --warn-soft: #fbf0dc;
-    --ok: #2f8f4e;
-    --flash: #fff6cf;
-
-    font-family:
-      -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Avenir, Helvetica, Arial, sans-serif;
-    font-size: 15px;
-    line-height: 1.4;
-    color-scheme: light;
-  }
-
-  @media (prefers-color-scheme: dark) {
-    :global(:root) {
-      --bg: #1e1e1e;
-      --surface: #2a2a2a;
-      --surface-hover: #343434;
-      --border: #3c3c3c;
-      --text: #f0f0f0;
-      --muted: #9a9a9a;
-      --accent: #6ea2ff;
-      --accent-soft: #223252;
-      --on-accent: #0f0f0f;
-      --error: #ff6b5e;
-      --warn: #e0ad5c;
-      --warn-soft: #3a311d;
-      --ok: #5ec47f;
-      --flash: #3a3420;
-      color-scheme: dark;
-    }
-  }
-
-  :global(body) {
-    margin: 0;
-    background: var(--bg);
-    color: var(--text);
-  }
-
-  :global(button) {
-    font: inherit;
-    color: inherit;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 0.45rem 0.8rem;
-    cursor: pointer;
-  }
-
-  :global(button:hover:not(:disabled)) {
-    background: var(--surface-hover);
-  }
-
-  :global(button:disabled) {
-    opacity: 0.6;
-    cursor: default;
-  }
-
-  :global(input) {
-    font: inherit;
-    color: inherit;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 0.4rem 0.6rem;
-  }
-
-  main {
+  .app {
     display: flex;
     flex-direction: column;
     height: 100vh;
   }
 
-  .app-header {
-    padding: 0.9rem 1.2rem 0.6rem;
-    border-bottom: 1px solid var(--border);
+  .title-bar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 28px;
+    flex: none;
+    /* The one flourish in the app. --face against --chrome was a 12-point
+       luminance step and read as a flat bar; stripes need the full light-to-
+       shade range to look chiselled rather than smudged. */
+    background: repeating-linear-gradient(
+      to bottom,
+      var(--light) 0px,
+      var(--light) 1px,
+      var(--face-dark) 1px,
+      var(--face-dark) 2px
+    );
+    border-bottom: 1px solid var(--edge);
   }
 
-  .app-header h1 {
-    margin: 0;
-    font-size: 1.2rem;
-  }
-
-  .tagline {
-    margin: 0.15rem 0 0;
-    color: var(--muted);
-    font-size: 0.85rem;
+  .title-bar-text {
+    /* Sits in a gap punched out of the stripes, the way a Platinum window
+       title does - hence the chrome fill and the breathing room either side. */
+    background: var(--chrome);
+    padding: 2px 14px;
+    font-size: 13px;
+    font-weight: bold;
+    letter-spacing: 0.02em;
   }
 
   .panes {
     flex: 1;
     display: grid;
-    grid-template-columns: minmax(180px, 1fr) minmax(220px, 1.2fr) minmax(280px, 1.8fr);
+    grid-template-columns: minmax(170px, 1fr) minmax(200px, 1.1fr) minmax(280px, 1.8fr);
+    gap: 8px;
     min-height: 0;
+    padding: 8px;
+    background: var(--chrome);
   }
 
   .panes > :global(section) {
-    border-right: 1px solid var(--border);
-    background: var(--surface);
-  }
-
-  .panes > :global(section:last-child) {
-    border-right: none;
+    min-height: 0;
   }
 
   .app-footer {
-    padding: 0.5rem 1.2rem;
-    border-top: 1px solid var(--border);
-    font-size: 0.75rem;
-    color: var(--muted);
+    flex: none;
+    padding: 4px 12px;
+    border-top: 1px solid var(--edge);
+    background: var(--chrome);
+    font-size: 11px;
+    opacity: 0.65;
     text-align: center;
   }
 </style>

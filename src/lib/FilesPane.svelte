@@ -20,106 +20,107 @@
     <h2>Files</h2>
   </div>
 
-  {#if !selectedVault || !files}
-    <p class="hint">Pick a folder on the left to see what's tracked in it.</p>
-  {:else if files.status === "loading"}
-    <p class="hint">Looking for tracked files…</p>
-  {:else if files.status === "error"}
-    <p class="banner error">{files.message}</p>
-  {:else if files.data.length === 0}
-    <p class="hint">
-      Files appear here on their own once they're saved. Save a .pptx,
-      .docx, or .xlsx in this folder to see it tracked.
-    </p>
-  {:else}
-    <ul class="list">
-      {#each files.data as file (file.id)}
-        <li>
-          <button
-            class="list-item"
-            class:selected={file.id === selectedFileId}
-            onclick={() => onSelect(file.id)}
-          >
-            <span class="path">{file.relativePath}</span>
-            <span class="when">
-              {file.lastChanged === null ? "no versions yet" : formatRelativeTime(file.lastChanged)}
-            </span>
-          </button>
-        </li>
-      {/each}
-    </ul>
-  {/if}
+  <div class="well">
+    {#if !selectedVault || !files}
+      <p class="hint pad">Pick a folder on the left to see what's tracked in it.</p>
+    {:else if files.status === "loading"}
+      <p class="hint pad">Looking for tracked files…</p>
+    {:else if files.status === "error"}
+      <p class="error-text pad">{files.message}</p>
+    {:else if files.data.length === 0}
+      <p class="hint pad">Files appear here once they're saved in this folder.</p>
+    {:else}
+      <ul class="list">
+        {#each files.data as file (file.id)}
+          <li>
+            <button
+              class="row"
+              class:selected={file.id === selectedFileId}
+              onclick={() => onSelect(file.id)}
+            >
+              <span class="name">{file.relativePath}</span>
+              <span class="when">
+                {file.lastChanged === null ? "no versions" : formatRelativeTime(file.lastChanged)}
+              </span>
+            </button>
+          </li>
+        {/each}
+      </ul>
+    {/if}
+  </div>
 </section>
 
 <style>
   .pane {
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
-    padding: 1rem;
-    overflow-y: auto;
+    gap: 6px;
+    min-height: 0;
+    height: 100%;
   }
 
   .pane-header h2 {
-    margin: 0;
-    font-size: 1rem;
+    font-size: 11px;
+    font-weight: bold;
   }
 
-  .hint {
-    color: var(--muted);
-    font-size: 0.9rem;
-    line-height: 1.4;
+  .pad {
+    padding: 8px;
+  }
+
+  .well {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
   }
 
   .list {
     list-style: none;
     margin: 0;
     padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
   }
 
-  .list-item {
+  .row {
     width: 100%;
     display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.15rem;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
     text-align: left;
     background: none;
-    border: 1px solid transparent;
-    border-radius: 6px;
-    padding: 0.5rem 0.6rem;
+    border: none;
+    box-shadow: none;
+    border-radius: 0;
+    min-height: 24px;
+    padding: 3px 8px;
     font: inherit;
-    color: inherit;
-    cursor: pointer;
+    color: var(--ink);
   }
 
-  .list-item:hover {
-    background: var(--surface-hover);
+  .row:hover:not(.selected) {
+    background: var(--face-hover);
   }
 
-  .list-item.selected {
-    background: var(--accent-soft);
-    border-color: var(--accent);
-  }
-
-  .path {
-    font-weight: 500;
+  .name {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    max-width: 100%;
+    min-width: 0;
   }
 
   .when {
-    font-size: 0.8rem;
-    color: var(--muted);
+    flex: none;
+    font-family: var(--data);
+    font-size: 11px;
+    opacity: 0.75;
   }
 
-  .banner.error {
-    color: var(--error);
-    font-size: 0.9rem;
+  .row.selected {
+    background: var(--select);
+    color: #fff;
+  }
+
+  .row.selected .when {
+    opacity: 1;
   }
 </style>

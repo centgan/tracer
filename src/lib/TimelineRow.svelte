@@ -64,136 +64,140 @@
   }
 </script>
 
-<li class="row" class:pinned={!!revision.milestone} class:flash={justArrived}>
-  <div class="main">
-    <div class="when">
-      {formatRelativeTime(revision.timestamp)}
-      <span class="size">· {formatBytes(revision.byteSize)}</span>
-      {#if revision.authorName}
-        <span class="author" title={revision.authorEmail ?? undefined}
-          >· {revision.authorName}</span
-        >
+<li class="row" class:flash={justArrived}>
+  <div class="row-top">
+    <div class="main">
+      <div class="fields">
+        <span class="time">{formatRelativeTime(revision.timestamp)}</span>
+        <span class="size">{formatBytes(revision.byteSize)}</span>
+        <span class="author" title={revision.authorEmail ?? undefined}>
+          {revision.authorName ?? ""}
+        </span>
+        {#if justArrived}<span class="new">new</span>{/if}
+      </div>
+
+      <!-- Name sits below its own timestamp, same slot as "Name this version".
+           Above it, a star read as a heading for the row underneath and you
+           couldn't tell which version was the named one. -->
+      {#if revision.milestone && !naming}
+        <button class="plain milestone" onclick={startNaming} title="Rename this version">
+          <span aria-hidden="true">★</span>
+          {revision.milestone}
+        </button>
       {/if}
-      {#if justArrived}<span class="badge">new</span>{/if}
+
+      {#if !revision.milestone && !naming}
+        <button class="plain name-link" onclick={startNaming}>Name this version</button>
+      {/if}
+
+      {#if naming}
+        <div class="naming">
+          <input
+            bind:value={labelDraft}
+            placeholder="e.g. sent to supervisor"
+            disabled={namingBusy}
+            onkeydown={(e) => e.key === "Enter" && confirmNaming()}
+          />
+          <button onclick={confirmNaming} disabled={namingBusy}>Save</button>
+          <button class="plain" onclick={() => (naming = false)} disabled={namingBusy}>
+            Cancel
+          </button>
+        </div>
+        {#if namingError}<p class="error-text">{namingError}</p>{/if}
+      {/if}
     </div>
 
-    {#if revision.milestone && !naming}
-      <button class="milestone" onclick={startNaming} title="Rename this version">
-        ★ {revision.milestone}
-      </button>
-    {:else if !naming}
-      <button class="link" onclick={startNaming}>Name this version</button>
-    {/if}
-
-    {#if naming}
-      <div class="naming">
-        <input
-          bind:value={labelDraft}
-          placeholder="e.g. sent to supervisor"
-          disabled={namingBusy}
-          onkeydown={(e) => e.key === "Enter" && confirmNaming()}
-        />
-        <button onclick={confirmNaming} disabled={namingBusy}>Save</button>
-        <button
-          class="ghost"
-          onclick={() => (naming = false)}
-          disabled={namingBusy}
-        >
-          Cancel
-        </button>
-      </div>
-      {#if namingError}<p class="banner error">{namingError}</p>{/if}
-    {/if}
-  </div>
-
-  <div class="actions">
-    <button onclick={handleSaveCopy} disabled={copyBusy}>
+    <button class="plain copy-btn" onclick={handleSaveCopy} disabled={copyBusy}>
       {copyBusy ? "Saving…" : "Save a copy"}
     </button>
-    {#if copyPath}
-      <p class="hint">
-        Saved a read-only copy to {copyPath}. Your live file wasn't touched.
-      </p>
-    {/if}
-    {#if copyError}<p class="banner error">{copyError}</p>{/if}
   </div>
+
+  {#if copyPath}
+    <p class="hint copy-note">Saved a read-only copy to {copyPath}. Your live file wasn't touched.</p>
+  {/if}
+  {#if copyError}<p class="error-text copy-note">{copyError}</p>{/if}
 </li>
 
 <style>
   .row {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    gap: 1rem;
-    padding: 0.75rem 0.85rem;
-    border-radius: 8px;
-    border: 1px solid var(--border);
-    transition: background-color 1.5s ease;
+    padding: 4px 8px;
   }
 
-  .row.pinned {
-    background: var(--accent-soft);
-    border-color: var(--accent);
+  @media (prefers-reduced-motion: no-preference) {
+    .row {
+      transition: background-color 1.2s ease;
+    }
   }
 
   .row.flash {
     background: var(--flash);
   }
 
+  .row-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
   .main {
     display: flex;
     flex-direction: column;
-    gap: 0.3rem;
+    gap: 2px;
     min-width: 0;
-  }
-
-  .when {
-    font-size: 0.9rem;
-  }
-
-  .size,
-  .author {
-    color: var(--muted);
-  }
-
-  .badge {
-    margin-left: 0.4rem;
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-    background: var(--accent);
-    color: var(--on-accent);
-    border-radius: 999px;
-    padding: 0.1rem 0.5rem;
   }
 
   .milestone {
     align-self: flex-start;
-    background: none;
-    border: none;
-    padding: 0;
-    font: inherit;
-    font-weight: 600;
-    color: var(--accent);
-    cursor: pointer;
-    text-align: left;
+    font-size: 13px;
+    font-weight: bold;
   }
 
-  .link {
+  .fields {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    font-family: var(--data);
+    font-size: 11px;
+  }
+
+  .time {
+    flex: none;
+    width: 10.5em;
+    white-space: nowrap;
+  }
+
+  .size {
+    flex: none;
+    width: 4.5em;
+    text-align: right;
+  }
+
+  .author {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--ui);
+    opacity: 0.75;
+  }
+
+  .new {
+    flex: none;
+    color: var(--live);
+    font-weight: bold;
+  }
+
+  .name-link {
     align-self: flex-start;
-    background: none;
-    border: none;
-    padding: 0;
-    font: inherit;
-    font-size: 0.85rem;
-    color: var(--muted);
-    text-decoration: underline;
-    cursor: pointer;
+    font-size: 11px;
+    opacity: 0.72;
   }
 
   .naming {
     display: flex;
-    gap: 0.4rem;
+    gap: 6px;
     align-items: center;
   }
 
@@ -202,30 +206,25 @@
     min-width: 0;
   }
 
-  .actions {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 0.3rem;
-    max-width: 18rem;
+  .copy-btn {
+    flex: none;
+    font-size: 11px;
+    opacity: 0;
   }
 
-  .hint,
-  .banner.error {
-    font-size: 0.8rem;
+  @media (prefers-reduced-motion: no-preference) {
+    .copy-btn {
+      transition: opacity 0.1s ease;
+    }
+  }
+
+  .row:hover .copy-btn,
+  .row:focus-within .copy-btn,
+  .copy-btn:focus-visible {
+    opacity: 1;
+  }
+
+  .copy-note {
     text-align: right;
-    overflow-wrap: anywhere;
-  }
-
-  .hint {
-    color: var(--muted);
-  }
-
-  .banner.error {
-    color: var(--error);
-  }
-
-  button.ghost {
-    background: none;
   }
 </style>

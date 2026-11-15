@@ -12,3 +12,6 @@ vite.config.ts.timestamp-*
 
 # Local Office fixtures - never publish these
 /test-data/
+
+# Screenshots from tools/screenshot.mjs
+/src-tauri/target/shots/

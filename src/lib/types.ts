@@ -44,6 +44,14 @@ export type Identity = {
 // by reading each file's timeline.
 export type FileWithLastChanged = TrackedFile & { lastChanged: number | null };
 
+// What a file's whole history costs, and what it would have cost without
+// part-level dedup. Mirrors `db::FileStats` in src-tauri/src/db.rs.
+export type FileStats = {
+  versionCount: number;
+  logicalBytes: number;
+  storedBytes: number;
+};
+
 // The three states every async pane can be in. `null` (used at the call
 // site, not part of this type) stands for "nothing to load yet" - e.g. no
 // folder picked - which is distinct from "loading" and needs its own copy.

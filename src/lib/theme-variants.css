@@ -1,0 +1,100 @@
+/* TEMPORARY. Directions to look at before picking one. Once chosen, the
+   winner's values move into theme.css and this file and its import go away -
+   the app is not getting a theme switcher nobody asked for.
+
+   These deliberately do NOT imitate an operating system. Retro as a feeling,
+   not a reproduction of a 1995 window manager. Applied via data-variant on
+   <html> by tools/screenshot.mjs. */
+
+/* ── Hardware: a 1970s desk instrument ───────────────────────────────────
+   Not software at all - a machine. Warm light casing, one orange accent the
+   way a power lamp is the only colour on a stereo, tiny precise labels, and
+   no bevels, because a moulded panel has seams rather than carved edges. */
+:root[data-variant="hardware"] {
+  --chrome: #cfcac0;
+  --face: #ded9cf;
+  --face-light: #efebe3;
+  --face-dark: #b6b0a4;
+  --well: #f6f4ef;
+  --light: #ffffff;
+  --shade: #9d968a;
+  --edge: #6f685c;
+  --ink: #2a251d;
+  --select: #c2410c;
+  --live: #4d7c0f;
+  --warn: #a16207;
+  --title-ink: #2a251d;
+  --title-fill: #bdb7aa;
+  --folder: #a16207;
+  --doc: #3f5d8a;
+  --sheet: #4d7c0f;
+  --deck: #b4471f;
+
+  --bevel-raised: none;
+  --bevel-sunken: inset 0 1px 2px rgb(0 0 0 / 12%);
+  --frame: 1px solid var(--edge);
+  --radius: 2px;
+}
+
+/* ── Paper: a printed technical manual ──────────────────────────────────
+   The register of a library index card or an appendix table. Cream stock,
+   black rules, one red for the thing that matters. No chrome at all - the
+   panels are areas of a page, not boxes on a screen. */
+:root[data-variant="paper"] {
+  --chrome: #e8e3d7;
+  --face: #f3efe6;
+  --face-light: #ffffff;
+  --face-dark: #d6d0c0;
+  --well: #fbf9f3;
+  --light: #ffffff;
+  --shade: #b9b2a0;
+  --edge: #3b362c;
+  --ink: #241f17;
+  --select: #9b2226;
+  --live: #38672f;
+  --warn: #9a6a1c;
+  --title-ink: #fbf9f3;
+  --title-fill: #3b362c;
+  --folder: #9a6a1c;
+  --doc: #2f4f7a;
+  --sheet: #38672f;
+  --deck: #9b2226;
+
+  --bevel-raised: none;
+  --bevel-sunken: none;
+  --frame: 1px solid var(--edge);
+  --radius: 0;
+}
+
+/* ── Phosphor: the screen before the GUI ────────────────────────────────
+   A terminal, not a window manager. Near-black glass, amber text, and the
+   only hierarchy available is brightness. The most retro of the three and
+   the furthest from Windows. */
+:root[data-variant="phosphor"] {
+  --chrome: #15130f;
+  --face: #211d16;
+  --face-light: #2d281e;
+  --face-dark: #0d0b08;
+  --well: #0e0c09;
+  --light: #38311f;
+  --shade: #000000;
+  --edge: #4a3f26;
+  --ink: #f0b429;
+  --select: #7a4f06;
+  --live: #85b50a;
+  --warn: #d97706;
+  --title-ink: #15130f;
+  --title-fill: #f0b429;
+  --folder: #d9a441;
+  --doc: #6ba6d9;
+  --sheet: #85b50a;
+  --deck: #e06c3b;
+
+  --bevel-raised: none;
+  --bevel-sunken: none;
+  --frame: 1px solid var(--edge);
+  --radius: 0;
+
+  --ui: Monaco, "Courier New", monospace;
+  --data: Monaco, "Courier New", monospace;
+}

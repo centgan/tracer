@@ -1,0 +1,284 @@
+@import "./theme-variants.css";
+
+/* Platinum/Windows-95 token sheet. DESIGN.md owns the values; this file is
+   the single place they're declared so bevels aren't hand-rolled per
+   component. */
+
+:root {
+  --chrome: #d6d2ca;
+  --face: #cac5bc;
+  --face-hover: #bdb8ae;
+  --well: #f2f0ec;
+  --light: #ffffff;
+  --face-light: #e4e0d8;
+  --shade: #817d75;
+  --face-dark: #a6a199;
+  --edge: #2b2925;
+  --ink: #17150f;
+  --select: #000080;
+  --live: #007a3d;
+  --warn: #8a5a00;
+  /* Transient "just arrived" tint. Same hue as --live - it's a live-update
+     cue, not a fourth color. */
+  --flash: rgb(0 122 61 / 16%);
+
+  --title-a: #000080;
+  --title-b: #1084d0;
+  /* The whole title-bar background, so a theme can swap a gradient for a
+     pattern without touching the markup. */
+  --title-fill: linear-gradient(to right, var(--title-a), var(--title-b));
+  --title-ink: #ffffff;
+  --folder: #e0a33c;
+  --doc: #2b579a;
+  --sheet: #217346;
+  --deck: #b7472a;
+
+  /* Shared column grid for the timeline: a leading spine gutter, then label,
+     time, size, author, and a trailing "new" flag. Time/size are sized for
+     their worst-case text ("6 days ago 12:50 PM", "999.9 MB"); label and
+     author split what's left, weighted toward the label since version names
+     run longer than author names. Declared once so TimelineRow and the
+     session-toggle row never drift apart. The spine column never collapses -
+     it's the one thing every row keeps at every width. */
+  --timeline-grid: 22px 11.75em minmax(6em, 3fr) minmax(4em, 1fr) 2.5em;
+
+  /* Bevels as tokens, so a theme can flatten them without rewriting every
+     component. A look that isn't imitating system chrome needs them gone. */
+  --bevel-raised:
+    inset 1px 1px 0 var(--light),
+    inset 2px 2px 0 var(--face-light),
+    inset -1px -1px 0 var(--shade),
+    inset -2px -2px 0 var(--face-dark);
+  --bevel-sunken:
+    inset 1px 1px 0 var(--shade),
+    inset 2px 2px 0 var(--face-dark);
+  --frame: 1px solid var(--edge);
+  --radius: 0;
+
+  --ui: Geneva, "MS Sans Serif", Verdana, sans-serif;
+  --data: Monaco, "Courier New", monospace;
+
+  font-family: var(--ui);
+  font-size: 13px;
+  line-height: 1.4;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --chrome: #39352f;
+    --face: #433e37;
+    --face-hover: #4d473f;
+    --well: #211f1b;
+    --light: #56514a;
+    --face-light: #4a453e;
+    --shade: #15130f;
+    --face-dark: #26231e;
+    --edge: #0b0a08;
+    --ink: #e8e4da;
+    --live: #2fbf6e;
+    --warn: #caa23a;
+    --flash: rgb(47 191 110 / 20%);
+
+    /* Same hues, lifted in lightness/saturation so they still read against
+       dark chrome instead of sinking into it. */
+    --title-a: #0c1f6e;
+    --title-b: #2fa0e0;
+    --title-fill: linear-gradient(to right, var(--title-a), var(--title-b));
+    --title-ink: #ffffff;
+    --folder: #e8b457;
+    --doc: #4d8fd1;
+    --sheet: #3ba86a;
+    --deck: #d1724d;
+
+    color-scheme: dark;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--chrome);
+  color: var(--ink);
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+/* Raised: anything pressable (buttons). */
+button {
+  appearance: none;
+  background: var(--face);
+  border: var(--frame);
+  border-radius: var(--radius);
+  box-shadow: var(--bevel-raised);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  min-height: 24px;
+  padding: 3px 12px;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: var(--face-hover);
+}
+
+button:active:not(:disabled) {
+  box-shadow: var(--bevel-sunken);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* A button stripped of its bevel, for inline/quiet actions (naming a
+   version, dismissing a row). Still a real button: focusable, 24px tall. */
+button.plain {
+  background: none;
+  border: 1px solid transparent;
+  box-shadow: none;
+  min-height: auto;
+  padding: 2px 4px;
+}
+
+button.plain:hover:not(:disabled) {
+  background: var(--face-hover);
+}
+
+input[type="text"],
+input[type="email"] {
+  font: inherit;
+  color: var(--ink);
+  background: var(--well);
+  border: var(--frame);
+  border-radius: var(--radius);
+  box-shadow: var(--bevel-sunken);
+  padding: 3px 6px;
+  min-height: 24px;
+}
+
+/* Sunken well: list panes, text fields. */
+.well {
+  background: var(--well);
+  border: var(--frame);
+  border-radius: var(--radius);
+  box-shadow: var(--bevel-sunken);
+}
+
+.hint {
+  color: var(--ink);
+  opacity: 0.72;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.error-text {
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: bold;
+}
+
+.error-text::before {
+  content: "\26a0 ";
+}
+
+:focus-visible {
+  outline: 2px solid var(--select);
+  outline-offset: 1px;
+}
+
+/* A narrow window can't carry five columns: at 760px the time column was
+   truncating to "today 01:..." and the time is the label for an unnamed
+   version. Drop the least load-bearing columns instead of squeezing all of
+   them - author first, then size. The label and time always survive. */
+@media (max-width: 1000px) {
+  :root {
+    --timeline-grid: 22px 11.75em minmax(6em, 3fr) 0 2.5em;
+  }
+}
+
+@media (max-width: 850px) {
+  :root {
+    /* An unnamed version carries its time in the label, so the label needs
+       room for a full timestamp before the (then empty) time column gets any. */
+    --timeline-grid: 22px 11.75em minmax(5em, 3fr) 0 2.5em;
+  }
+}
+
+/* The activity spine: a continuous vertical line down the timeline's leading
+   column, with a mark per version and a density cluster per session. Shared
+   here (not scoped per component) for the same reason as --timeline-grid -
+   TimelineRow's per-version mark and TimelinePane's session/gap rows must
+   never drift apart. Kept monochrome (--ink only) per DESIGN.md: colour
+   always means something, and this is structure, not a fourth colour. */
+.spine {
+  position: relative;
+  /* The row's own `align-items: center` would otherwise shrink this cell to
+     its content height; stretching it is what makes the line meet the next
+     row's line with no visible break. */
+  align-self: stretch;
+}
+
+.spine-line {
+  position: absolute;
+  inset: 0 auto 0 6px;
+  width: 1px;
+  background: currentColor;
+  opacity: 0.3;
+}
+
+/* Quiet periods get a fainter, dashed line instead of the solid one. */
+.spine-line.dashed {
+  background: none;
+  border-left: 1px dashed currentColor;
+  opacity: 0.4;
+}
+
+/* Versions read as graduations on a rule rather than symbols scattered in a
+   column: a tick crossing the line, longer and heavier when the version is
+   named. Geometry, not glyphs. */
+.spine-mark {
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  width: 8px;
+  height: 1px;
+  transform: translateY(-50%);
+  background: currentColor;
+  opacity: 0.55;
+}
+
+.spine-mark.named {
+  left: 1px;
+  width: 13px;
+  height: 3px;
+  opacity: 1;
+}
+
+/* A session is a stretch of sustained work, so it reads as a solid run down
+   the rule rather than as separate marks - its weight carries how much
+   happened. */
+.spine-ticks {
+  position: absolute;
+  inset: 2px auto 2px 4px;
+  width: 5px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.spine-ticks .tick {
+  width: 100%;
+  height: 2px;
+  background: currentColor;
+  opacity: 0.6;
+}

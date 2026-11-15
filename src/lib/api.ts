@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Vault, TrackedFile, Revision, Identity } from "./types";
+import type { Vault, TrackedFile, Revision, Identity, FileStats } from "./types";
 
 function asMessage(e: unknown): string {
   if (typeof e === "string") return e;
@@ -20,6 +20,7 @@ export const addVault = (path: string) => call<Vault>("add_vault", { path });
 export const listTrackedFiles = (vaultId: number) =>
   call<TrackedFile[]>("list_tracked_files", { vaultId });
 export const getTimeline = (fileId: number) => call<Revision[]>("get_timeline", { fileId });
+export const getFileStats = (fileId: number) => call<FileStats>("get_file_stats", { fileId });
 export const setMilestone = (revisionId: number, label: string) =>
   call<void>("set_milestone", { revisionId, label });
 export const saveCopy = (revisionId: number) => call<string>("save_copy", { revisionId });

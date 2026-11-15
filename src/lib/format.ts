@@ -3,7 +3,23 @@ export function formatBytes(bytes: number): string {
   const kb = bytes / 1024;
   if (kb < 1024) return `${kb.toFixed(kb < 10 ? 1 : 0)} KB`;
   const mb = kb / 1024;
-  return `${mb.toFixed(mb < 10 ? 1 : 0)} MB`;
+  if (mb < 1024) return `${mb.toFixed(mb < 10 ? 1 : 0)} MB`;
+  // A whole file's history can run into gigabytes; always keep one decimal
+  // here, since rounding "11.7 GB" to "12 GB" throws away the figure that
+  // matters at this scale.
+  const gb = mb / 1024;
+  return `${gb.toFixed(1)} GB`;
+}
+
+import type { FileStats } from "./types";
+
+// The quiet stats line near the timeline header. Never claims a saving that
+// isn't real: a brand-new file has storedBytes >= logicalBytes (one version,
+// nothing shared yet), so it gets just the count, no "kept in" clause.
+export function formatFileStats(stats: FileStats): string {
+  const versions = `${stats.versionCount} version${stats.versionCount === 1 ? "" : "s"}`;
+  if (stats.storedBytes >= stats.logicalBytes) return versions;
+  return `${versions} · ${formatBytes(stats.logicalBytes)} of history, kept in ${formatBytes(stats.storedBytes)}`;
 }
 
 function startOfDay(d: Date): number {
@@ -17,7 +33,20 @@ function dayLabel(date: Date, now: Date): { text: string; withTime: boolean } {
   if (dayDiff <= 0) return { text: "today", withTime: true };
   if (dayDiff === 1) return { text: "yesterday", withTime: true };
   if (dayDiff < 7) return { text: `${dayDiff} days ago`, withTime: true };
-  return { text: date.toLocaleDateString(), withTime: false };
+
+  // Not toLocaleDateString: "11/6/2026" is ambiguous between the 11th of June
+  // and the 6th of November, and in a timeline you are often trying to place a
+  // version precisely. A named month can't be misread. The year appears only
+  // when it isn't the current one, so a busy year stays uncluttered.
+  const sameYear = date.getFullYear() === now.getFullYear();
+  return {
+    text: date.toLocaleDateString(undefined, {
+      day: "numeric",
+      month: "short",
+      ...(sameYear ? {} : { year: "numeric" }),
+    }),
+    withTime: false,
+  };
 }
 
 // Timestamps from the backend are unix seconds, not milliseconds.
@@ -36,7 +65,15 @@ export function formatSessionSpan(startUnixSeconds: number, endUnixSeconds: numb
   const end = new Date(endUnixSeconds * 1000);
   const { text, withTime } = dayLabel(start, new Date());
   if (!withTime) return text;
-  const startTime = start.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  const endTime = end.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  return `${text} ${startTime} – ${endTime}`;
+  // "today 02:22 PM – 02:37 PM" is too long for the time column and gets
+  // ellipsized, which loses the end of the span entirely. A session never
+  // crosses midday in practice (it's bounded by SESSION_GAP_SECONDS), so the
+  // meridiem is said once, at the end.
+  const hhmm = (d: Date) =>
+    d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).replace(/\s*[AaPp]\.?[Mm]\.?$/, "");
+  const meridiem = end
+    .toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+    .slice(hhmm(end).length)
+    .trim();
+  return `${text} ${hhmm(start)}–${hhmm(end)}${meridiem ? ` ${meridiem}` : ""}`;
 }

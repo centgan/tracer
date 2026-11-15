@@ -24,9 +24,15 @@
   function folderName(rootPath: string): string {
     return rootPath.split(/[/\\]/).filter(Boolean).pop() ?? rootPath;
   }
+
+  function watchTitle(vault: Vault): string {
+    return vault.hasTracerFolder
+      ? vault.rootPath
+      : `${vault.rootPath} — its .tracer folder was removed, so Tracer stopped watching it.`;
+  }
 </script>
 
-<section class="pane folders">
+<section class="pane">
   <div class="pane-header">
     <h2>Folders</h2>
     <button onclick={onAddFolder} disabled={addingVault}>
@@ -35,165 +41,156 @@
   </div>
 
   {#if addVaultError}
-    <p class="banner error">{addVaultError}</p>
+    <p class="error-text">{addVaultError}</p>
   {/if}
 
-  <p class="hint tracer-explain">
-    Tracer only watches folders containing a <code>.tracer</code> folder. Delete that folder to
-    stop watching — your files are never touched.
-  </p>
+  <p class="hint">Delete a folder's .tracer folder to stop watching it.</p>
 
-  {#if vaults.status === "loading"}
-    <p class="hint">Loading your folders…</p>
-  {:else if vaults.status === "error"}
-    <p class="banner error">{vaults.message}</p>
-    <button onclick={onRetry}>Try again</button>
-  {:else if vaults.data.length === 0}
-    <p class="hint">
-      Pick a folder. Every time you save a file in it, Tracer keeps a version
-      you can go back to.
-    </p>
-  {:else}
-    <ul class="list">
-      {#each vaults.data as vault (vault.id)}
-        <li>
-          <button
-            class="list-item"
-            class:selected={vault.id === selectedVaultId}
-            onclick={() => onSelect(vault.id)}
-            title={vault.rootPath}
-          >
-            <span class="folder-name">{folderName(vault.rootPath)}</span>
-            <span class="watch-status" class:unwatched={!vault.hasTracerFolder}>
-              <span class="dot" aria-hidden="true"></span>
-              {vault.hasTracerFolder ? "Watching" : "Not watched"}
-            </span>
-            {#if !vault.hasTracerFolder}
-              <span class="watch-explain">
-                Its .tracer folder was removed, so Tracer stopped watching this folder.
+  <div class="well">
+    {#if vaults.status === "loading"}
+      <p class="hint pad">Loading your folders…</p>
+    {:else if vaults.status === "error"}
+      <p class="error-text pad">{vaults.message}</p>
+      <button onclick={onRetry}>Try again</button>
+    {:else if vaults.data.length === 0}
+      <p class="hint pad">
+        Pick a folder. Every saved file in it gets a version you can go back to.
+      </p>
+    {:else}
+      <ul class="list">
+        {#each vaults.data as vault (vault.id)}
+          <li>
+            <button
+              class="row"
+              class:selected={vault.id === selectedVaultId}
+              onclick={() => onSelect(vault.id)}
+              title={watchTitle(vault)}
+            >
+              <span class="folder-info">
+                <svg class="folder-glyph" viewBox="0 0 16 12" aria-hidden="true" focusable="false">
+                  <path
+                    d="M1 2h5l1.5 1.5H15v7a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V2z"
+                    fill="var(--folder)"
+                    stroke="var(--edge)"
+                    stroke-width="1"
+                  />
+                </svg>
+                <span class="name">{folderName(vault.rootPath)}</span>
               </span>
-            {/if}
-          </button>
-        </li>
-      {/each}
-    </ul>
-  {/if}
+              <span class="state" class:unwatched={!vault.hasTracerFolder}>
+                <span class="dot" aria-hidden="true">●</span>
+                {vault.hasTracerFolder ? "Watching" : "Not watched"}
+              </span>
+            </button>
+          </li>
+        {/each}
+      </ul>
+    {/if}
+  </div>
 </section>
 
 <style>
   .pane {
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
-    padding: 1rem;
-    overflow-y: auto;
+    gap: 6px;
+    min-height: 0;
+    height: 100%;
   }
 
   .pane-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 0.5rem;
+    gap: 8px;
   }
 
   .pane-header h2 {
-    margin: 0;
-    font-size: 1rem;
+    font-size: 11px;
+    font-weight: bold;
   }
 
-  .hint {
-    color: var(--muted);
-    font-size: 0.9rem;
-    line-height: 1.4;
+  .pad {
+    padding: 8px;
   }
 
-  .tracer-explain {
-    font-size: 0.78rem;
-  }
-
-  .tracer-explain code {
-    font-family: inherit;
-    background: var(--surface-hover);
-    border-radius: 3px;
-    padding: 0.05rem 0.3rem;
+  .well {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
   }
 
   .list {
     list-style: none;
     margin: 0;
     padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
   }
 
-  .list-item {
+  .row {
     width: 100%;
     display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.2rem;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
     text-align: left;
     background: none;
-    border: 1px solid transparent;
-    border-radius: 6px;
-    padding: 0.5rem 0.6rem;
+    border: none;
+    box-shadow: none;
+    border-radius: 0;
+    min-height: 24px;
+    padding: 3px 8px;
     font: inherit;
-    color: inherit;
-    cursor: pointer;
+    color: var(--ink);
   }
 
-  .folder-name {
+  .row:hover:not(.selected) {
+    background: var(--face-hover);
+  }
+
+  .folder-info {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .folder-glyph {
+    flex: none;
+    width: 16px;
+    height: 12px;
+  }
+
+  .name {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    max-width: 100%;
+    min-width: 0;
   }
 
-  .watch-status {
+  .state {
+    flex: none;
     display: flex;
     align-items: center;
-    gap: 0.35rem;
-    font-size: 0.78rem;
-    color: var(--ok);
+    gap: 4px;
+    font-size: 11px;
+    color: var(--live);
   }
 
-  .watch-status .dot {
-    width: 0.45rem;
-    height: 0.45rem;
-    border-radius: 50%;
-    background: var(--ok);
+  .state .dot {
+    font-size: 8px;
   }
 
-  .watch-status.unwatched {
+  .state.unwatched {
     color: var(--warn);
   }
 
-  .watch-status.unwatched .dot {
-    background: var(--warn);
+  .row.selected {
+    background: var(--select);
+    color: #fff;
   }
 
-  .watch-explain {
-    font-size: 0.75rem;
-    color: var(--warn);
-    background: var(--warn-soft);
-    border-radius: 4px;
-    padding: 0.2rem 0.4rem;
-    white-space: normal;
-  }
-
-  .list-item:hover {
-    background: var(--surface-hover);
-  }
-
-  .list-item.selected {
-    background: var(--accent-soft);
-    border-color: var(--accent);
-    font-weight: 600;
-  }
-
-  .banner.error {
-    color: var(--error);
-    font-size: 0.9rem;
+  .row.selected .state,
+  .row.selected .state.unwatched {
+    color: #fff;
   }
 </style>

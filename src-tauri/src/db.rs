@@ -446,6 +446,48 @@ pub fn get_revision_target(conn: &Connection, revision_id: i64) -> Result<Option
     .optional()
 }
 
+/// What a file's whole history costs, and what it would have cost.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileStats {
+    pub version_count: i64,
+    /// Every version's full size added up - what naive copies would occupy.
+    pub logical_bytes: i64,
+    /// What the shared parts behind those versions actually occupy.
+    pub stored_bytes: i64,
+}
+
+/// Measures the payoff of storing parts rather than whole files.
+///
+/// `stored_bytes` counts each distinct object once. An object shared with
+/// another tracked file is counted here too, so this answers "what does this
+/// file's history occupy" rather than "what would deleting it free" - the
+/// honest reading for a per-file figure, and the useful one.
+pub fn file_stats(conn: &Connection, file_id: i64) -> Result<FileStats> {
+    let (version_count, logical_bytes) = conn.query_row(
+        "SELECT COUNT(*), COALESCE(SUM(byte_size), 0) FROM revisions WHERE file_id = ?1",
+        params![file_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+
+    let stored_bytes = conn.query_row(
+        "SELECT COALESCE(SUM(stored_size), 0) FROM objects
+         WHERE hash IN (
+             SELECT rp.object_hash FROM revision_parts rp
+             JOIN revisions r ON r.id = rp.revision_id
+             WHERE r.file_id = ?1
+         )",
+        params![file_id],
+        |row| row.get(0),
+    )?;
+
+    Ok(FileStats {
+        version_count,
+        logical_bytes,
+        stored_bytes,
+    })
+}
+
 pub fn get_revision_parts(conn: &Connection, revision_id: i64) -> Result<Vec<PartRecord>> {
     let mut stmt = conn.prepare(
         "SELECT entry_order, entry_name, compression_method, object_hash
@@ -769,6 +811,59 @@ mod tests {
         assert_eq!(files_a.len(), 1);
         assert_eq!(files_b.len(), 1);
         assert_eq!(files_a[0].relative_path, files_b[0].relative_path);
+    }
+
+    #[test]
+    fn file_stats_counts_shared_parts_once() {
+        let (_file, mut conn) = temp_db();
+
+        let vault = add_vault(&conn, "/a/foo").unwrap();
+        let file_id = upsert_file(&conn, vault.id, "deck.pptx", "pptx").unwrap();
+
+        // One part changes between versions, one is identical in both - the
+        // whole reason storing parts beats storing files.
+        let objects = vec![
+            ObjectRecord { hash: "shared".into(), size: 900, stored_size: 400, compressed: true },
+            ObjectRecord { hash: "v1".into(), size: 100, stored_size: 50, compressed: true },
+            ObjectRecord { hash: "v2".into(), size: 100, stored_size: 60, compressed: true },
+        ];
+        let part = |order: i64, hash: &str| PartRecord {
+            entry_order: order,
+            entry_name: format!("part{order}.xml"),
+            compression_method: "deflated".into(),
+            object_hash: hash.to_string(),
+        };
+
+        insert_revision(&mut conn, NewRevision {
+            file_id, timestamp: 1000, byte_size: 1000, manifest_hash: "m1",
+            parts: &[part(0, "shared"), part(1, "v1")], objects: &objects[..2],
+            author_name: None, author_email: None, parent_id: None,
+        }).unwrap();
+
+        insert_revision(&mut conn, NewRevision {
+            file_id, timestamp: 2000, byte_size: 1000, manifest_hash: "m2",
+            parts: &[part(0, "shared"), part(1, "v2")], objects: &objects[2..],
+            author_name: None, author_email: None, parent_id: None,
+        }).unwrap();
+
+        let stats = file_stats(&conn, file_id).unwrap();
+        assert_eq!(stats.version_count, 2);
+        // Two versions of a 1000-byte file look like 2000 bytes of history...
+        assert_eq!(stats.logical_bytes, 2000);
+        // ...but the shared part is stored once: 400 + 50 + 60.
+        assert_eq!(stats.stored_bytes, 510);
+    }
+
+    #[test]
+    fn file_stats_of_an_untouched_file_is_all_zeroes() {
+        let (_file, conn) = temp_db();
+        let vault = add_vault(&conn, "/a/foo").unwrap();
+        let file_id = upsert_file(&conn, vault.id, "deck.pptx", "pptx").unwrap();
+
+        let stats = file_stats(&conn, file_id).unwrap();
+        assert_eq!(stats.version_count, 0);
+        assert_eq!(stats.logical_bytes, 0);
+        assert_eq!(stats.stored_bytes, 0);
     }
 
     #[test]

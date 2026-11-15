@@ -185,6 +185,14 @@ fn list_tracked_files(
     db::list_tracked_files(&conn, vault_id).map_err(to_err)
 }
 
+/// Backs the line that makes the point of the whole app visible: how much
+/// history there is, versus what it costs to keep.
+#[tauri::command]
+fn get_file_stats(file_id: i64, state: State<'_, AppState>) -> Result<db::FileStats, String> {
+    let conn = lock(&state)?;
+    db::file_stats(&conn, file_id).map_err(to_err)
+}
+
 #[tauri::command]
 fn get_timeline(file_id: i64, state: State<'_, AppState>) -> Result<Vec<db::Revision>, String> {
     let conn = lock(&state)?;
@@ -372,6 +380,7 @@ pub fn run() {
             add_vault,
             list_tracked_files,
             get_timeline,
+            get_file_stats,
             set_milestone,
             save_copy,
             quit_app,

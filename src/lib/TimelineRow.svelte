@@ -1,231 +1,125 @@
 <script lang="ts">
   import type { Revision } from "./types";
-  import { formatBytes, formatRelativeTime } from "./format";
+  import { formatRelativeTime } from "./format";
 
   let {
     revision,
+    selected,
     justArrived,
-    onSetMilestone,
-    onSaveCopy,
+    onSelect,
   }: {
     revision: Revision;
+    selected: boolean;
     justArrived: boolean;
-    onSetMilestone: (revisionId: number, label: string) => Promise<void>;
-    onSaveCopy: (revisionId: number) => Promise<string>;
+    onSelect: (revisionId: number) => void;
   } = $props();
-
-  let naming = $state(false);
-  // Populated by startNaming right before the input shows, not here - an
-  // initializer that reads a prop only captures its value once, which would
-  // go stale if the milestone changes later without the user reopening this.
-  let labelDraft = $state("");
-  let namingBusy = $state(false);
-  let namingError = $state<string | null>(null);
-
-  let copyBusy = $state(false);
-  let copyPath = $state<string | null>(null);
-  let copyError = $state<string | null>(null);
-
-  function startNaming() {
-    labelDraft = revision.milestone ?? "";
-    namingError = null;
-    naming = true;
-  }
-
-  async function confirmNaming() {
-    const label = labelDraft.trim();
-    if (!label) {
-      namingError = "Give this version a name first.";
-      return;
-    }
-    namingBusy = true;
-    namingError = null;
-    try {
-      await onSetMilestone(revision.id, label);
-      naming = false;
-    } catch (e) {
-      namingError = e instanceof Error ? e.message : "Couldn't save that name.";
-    } finally {
-      namingBusy = false;
-    }
-  }
-
-  async function handleSaveCopy() {
-    copyBusy = true;
-    copyError = null;
-    copyPath = null;
-    try {
-      copyPath = await onSaveCopy(revision.id);
-    } catch (e) {
-      copyError = e instanceof Error ? e.message : "Couldn't save a copy.";
-    } finally {
-      copyBusy = false;
-    }
-  }
 </script>
 
-<li class="row" class:pinned={!!revision.milestone} class:flash={justArrived}>
-  <div class="main">
-    <div class="when">
-      {formatRelativeTime(revision.timestamp)}
-      <span class="size">· {formatBytes(revision.byteSize)}</span>
-      {#if revision.authorName}
-        <span class="author" title={revision.authorEmail ?? undefined}
-          >· {revision.authorName}</span
-        >
+<li>
+  <button
+    class="row"
+    class:selected
+    class:flash={justArrived}
+    aria-pressed={selected}
+    onclick={() => onSelect(revision.id)}
+  >
+    <span class="spine" aria-hidden="true">
+      <span class="spine-line"></span>
+      <span class="spine-mark" class:named={!!revision.milestone}></span>
+    </span>
+    <!-- The time is always in the same column. It used to swap places with the
+         name, so the first column meant "name" on some rows and "when" on
+         others and you had to re-read every line to know which. -->
+    <span class="time">{formatRelativeTime(revision.timestamp)}</span>
+    <!-- A long name ellipsizes in a narrow window; the tooltip is the only way
+         to read the rest of it. -->
+    <span class="name" title={revision.milestone ?? undefined}>
+      {#if revision.milestone}
+        <span class="star" aria-hidden="true">★</span>{revision.milestone}
       {/if}
-      {#if justArrived}<span class="badge">new</span>{/if}
-    </div>
-
-    {#if revision.milestone && !naming}
-      <button class="milestone" onclick={startNaming} title="Rename this version">
-        ★ {revision.milestone}
-      </button>
-    {:else if !naming}
-      <button class="link" onclick={startNaming}>Name this version</button>
-    {/if}
-
-    {#if naming}
-      <div class="naming">
-        <input
-          bind:value={labelDraft}
-          placeholder="e.g. sent to supervisor"
-          disabled={namingBusy}
-          onkeydown={(e) => e.key === "Enter" && confirmNaming()}
-        />
-        <button onclick={confirmNaming} disabled={namingBusy}>Save</button>
-        <button
-          class="ghost"
-          onclick={() => (naming = false)}
-          disabled={namingBusy}
-        >
-          Cancel
-        </button>
-      </div>
-      {#if namingError}<p class="banner error">{namingError}</p>{/if}
-    {/if}
-  </div>
-
-  <div class="actions">
-    <button onclick={handleSaveCopy} disabled={copyBusy}>
-      {copyBusy ? "Saving…" : "Save a copy"}
-    </button>
-    {#if copyPath}
-      <p class="hint">
-        Saved a read-only copy to {copyPath}. Your live file wasn't touched.
-      </p>
-    {/if}
-    {#if copyError}<p class="banner error">{copyError}</p>{/if}
-  </div>
+    </span>
+    <span class="author" title={revision.authorEmail ?? undefined}>
+      {revision.authorName ?? ""}
+    </span>
+    <span class="new">{justArrived ? "new" : ""}</span>
+  </button>
 </li>
 
 <style>
   .row {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    gap: 1rem;
-    padding: 0.75rem 0.85rem;
-    border-radius: 8px;
-    border: 1px solid var(--border);
-    transition: background-color 1.5s ease;
+    width: 100%;
+    display: grid;
+    grid-template-columns: var(--timeline-grid);
+    align-items: center;
+    column-gap: 12px;
+    min-height: 24px;
+    padding: 3px 8px;
+    text-align: left;
+    background: none;
+    border: none;
+    box-shadow: none;
+    border-radius: 0;
+    font: inherit;
+    color: var(--ink);
   }
 
-  .row.pinned {
-    background: var(--accent-soft);
-    border-color: var(--accent);
+  .row:hover:not(.selected) {
+    background: var(--face-hover);
   }
 
-  .row.flash {
+  @media (prefers-reduced-motion: no-preference) {
+    .row:not(.selected) {
+      transition: background-color 1.2s ease;
+    }
+  }
+
+  .row.flash:not(.selected) {
     background: var(--flash);
   }
 
-  .main {
-    display: flex;
-    flex-direction: column;
-    gap: 0.3rem;
+  .name {
     min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: bold;
   }
 
-  .when {
-    font-size: 0.9rem;
+  .star {
+    margin-right: 4px;
   }
 
-  .size,
+  .time {
+    font-family: var(--data);
+    font-size: 11px;
+  }
+
   .author {
-    color: var(--muted);
+    font-size: 11px;
+    font-family: var(--ui);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    opacity: 0.75;
   }
 
-  .badge {
-    margin-left: 0.4rem;
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-    background: var(--accent);
-    color: var(--on-accent);
-    border-radius: 999px;
-    padding: 0.1rem 0.5rem;
+  .row.selected .author {
+    opacity: 1;
   }
 
-  .milestone {
-    align-self: flex-start;
-    background: none;
-    border: none;
-    padding: 0;
-    font: inherit;
-    font-weight: 600;
-    color: var(--accent);
-    cursor: pointer;
-    text-align: left;
+  .row.selected {
+    background: var(--select);
+    color: #fff;
   }
 
-  .link {
-    align-self: flex-start;
-    background: none;
-    border: none;
-    padding: 0;
-    font: inherit;
-    font-size: 0.85rem;
-    color: var(--muted);
-    text-decoration: underline;
-    cursor: pointer;
+  .new {
+    flex: none;
+    font-size: 11px;
+    font-weight: bold;
+    color: var(--live);
   }
 
-  .naming {
-    display: flex;
-    gap: 0.4rem;
-    align-items: center;
-  }
-
-  .naming input {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .actions {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 0.3rem;
-    max-width: 18rem;
-  }
-
-  .hint,
-  .banner.error {
-    font-size: 0.8rem;
-    text-align: right;
-    overflow-wrap: anywhere;
-  }
-
-  .hint {
-    color: var(--muted);
-  }
-
-  .banner.error {
-    color: var(--error);
-  }
-
-  button.ghost {
-    background: none;
+  .row.selected .new {
+    color: #fff;
   }
 </style>

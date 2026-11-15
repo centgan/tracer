@@ -10,9 +10,26 @@ use rusqlite::Connection;
 
 use crate::{db, engine, identity};
 
-/// Office saves fire several create/rename events per file; 5s collapses a
-/// single save into one batch instead of one revision per event.
-const DEBOUNCE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Office saves fire several create/rename events per file; this collapses a
+/// single save into one batch instead of one version per event.
+///
+/// It is also almost all of the delay between saving and seeing the version
+/// appear. Measured on real files (`snapshot_cost_on_real_files`), the work
+/// itself takes 6-64ms on a repeat save - a 3.7MB .docx with 44 parts takes
+/// 64ms, a 192-part .pptx takes 30ms - so the window, not the hashing, is what
+/// anyone waiting is waiting for. One second keeps a save's events together
+/// while staying short enough to feel immediate.
+const DEBOUNCE_TIMEOUT: Duration = Duration::from_millis(1000);
+
+/// How many times to re-attempt a snapshot that failed to read the file.
+///
+/// Office saves by writing a temp file and renaming it over the target, so the
+/// file is complete the moment it appears. Not every editor does that - some
+/// write in place - and with a short debounce we can arrive mid-write and find
+/// an unreadable archive. Retrying costs nothing when nothing is wrong, and is
+/// what makes a one second window safe.
+const SNAPSHOT_ATTEMPTS: u32 = 3;
+const SNAPSHOT_RETRY_DELAY: Duration = Duration::from_millis(400);
 
 /// Owns the debouncer for the app's lifetime. `Debouncer` stops watching as
 /// soon as it's dropped (`impl Drop` calls `set_stop`), so this handle must be
@@ -135,6 +152,30 @@ fn lock(conn: &Arc<Mutex<Connection>>) -> Result<std::sync::MutexGuard<'_, Conne
         .map_err(|_| anyhow::anyhow!("database lock poisoned by an earlier panic"))
 }
 
+/// Snapshots a file, re-attempting if it can't be read as an archive.
+///
+/// A file caught mid-write isn't an error worth reporting - it's a race we
+/// expect to lose occasionally and win a moment later. Only the final attempt's
+/// failure propagates, so a genuinely corrupt file still surfaces rather than
+/// being retried into silence.
+fn snapshot_with_retry(path: &Path, objects_root: &Path) -> Result<engine::Snapshot> {
+    let mut attempt = 1;
+    loop {
+        match engine::snapshot(path, objects_root) {
+            Ok(snapshot) => return Ok(snapshot),
+            Err(e) if attempt < SNAPSHOT_ATTEMPTS => {
+                eprintln!(
+                    "tracer: {} not readable yet (attempt {attempt}/{SNAPSHOT_ATTEMPTS}), retrying: {e:#}",
+                    path.display()
+                );
+                std::thread::sleep(SNAPSHOT_RETRY_DELAY);
+                attempt += 1;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 fn process_path(
     path: &Path,
     conn: &Arc<Mutex<Connection>>,
@@ -185,7 +226,7 @@ fn process_path(
 
     // Never hold the DB lock while snapshotting - hashing a multi-megabyte
     // deck must not block every other UI command for its duration.
-    let snap = engine::snapshot(path, objects_root)?;
+    let snap = snapshot_with_retry(path, objects_root)?;
 
     // Reading identity is a plain file read, not a database query - it must
     // not serialize against every other command just because it happens to
@@ -386,6 +427,48 @@ mod tests {
     fn paths_inside_the_tracer_folder_are_never_trackable() {
         assert!(!is_trackable(Path::new("/vault/.tracer/deck.pptx")));
         assert!(!is_trackable(Path::new("/vault/sub/.tracer/nested/deck.pptx")));
+    }
+
+    #[test]
+    fn a_file_still_being_written_is_retried_until_it_is_readable() {
+        let dir = scratch();
+        let objects = scratch();
+        let deck = dir.path().join("deck.pptx");
+
+        // Arrives as something that is not yet a readable archive, the way an
+        // editor writing in place would leave it.
+        std::fs::write(&deck, b"not a zip yet").unwrap();
+
+        let finisher = {
+            let deck = deck.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(500));
+                write_office_file(&deck, b"<p>finished</p>");
+            })
+        };
+
+        let snapshot = snapshot_with_retry(&deck, objects.path())
+            .expect("a file that becomes readable must not be dropped");
+        finisher.join().unwrap();
+
+        assert!(snapshot.parts.iter().any(|p| p.entry_name.contains("slide1")));
+    }
+
+    #[test]
+    fn a_file_that_never_becomes_readable_eventually_gives_up() {
+        let dir = scratch();
+        let objects = scratch();
+        let deck = dir.path().join("broken.pptx");
+        std::fs::write(&deck, b"never a zip").unwrap();
+
+        let started = std::time::Instant::now();
+        let result = snapshot_with_retry(&deck, objects.path());
+
+        assert!(result.is_err(), "a genuinely corrupt file must surface, not retry forever");
+        assert!(
+            started.elapsed() >= SNAPSHOT_RETRY_DELAY,
+            "it should have waited between attempts rather than failing instantly"
+        );
     }
 
     #[test]

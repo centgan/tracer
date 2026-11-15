@@ -472,6 +472,54 @@ mod tests {
         }
     }
 
+    /// Times `snapshot` on real Office files, to show where save-to-seen
+    /// latency actually goes before anyone tunes the watcher's debounce.
+    ///
+    /// `cargo test --lib snapshot_cost_on_real_files -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn snapshot_cost_on_real_files() {
+        let test_data = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("src-tauri always has a parent")
+            .join("test-data");
+
+        let mut sources: Vec<PathBuf> = fs::read_dir(&test_data)
+            .unwrap_or_else(|e| panic!("reading {}: {e}", test_data.display()))
+            .filter_map(|entry| {
+                let path = entry.ok()?.path();
+                let ext = path.extension()?.to_string_lossy().to_lowercase();
+                matches!(ext.as_str(), "pptx" | "docx" | "xlsx").then_some(path)
+            })
+            .collect();
+        sources.sort();
+        assert!(!sources.is_empty(), "no Office files in {}", test_data.display());
+
+        for source in sources {
+            let objects_root = tempdir().unwrap();
+            let size = fs::metadata(&source).unwrap().len();
+
+            let cold = std::time::Instant::now();
+            let snap = snapshot(&source, objects_root.path()).unwrap();
+            let cold = cold.elapsed();
+
+            // Second run: every object already on disk, which is the normal
+            // case once a file has been saved a few times.
+            let warm = std::time::Instant::now();
+            snapshot(&source, objects_root.path()).unwrap();
+            let warm = warm.elapsed();
+
+            println!(
+                "{:>52}  {:>7} KB  {:>3} parts  first {:>6.1} ms  repeat {:>6.1} ms",
+                source.file_name().unwrap().to_string_lossy(),
+                size / 1024,
+                snap.parts.len(),
+                cold.as_secs_f64() * 1000.0,
+                warm.as_secs_f64() * 1000.0,
+            );
+        }
+    }
+
     fn round_trip_one_real_file(source: &Path) {
         let objects_root = tempdir().unwrap();
         let out_dir = tempdir().unwrap();

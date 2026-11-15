@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatBytes, formatFileStats } from "./format";
+import { formatBytes, formatFileStats, formatSessionSpan } from "./format";
 
 describe("formatBytes", () => {
   it("renders gigabytes with one decimal even at large magnitudes", () => {
@@ -33,5 +33,22 @@ describe("formatFileStats", () => {
         storedBytes: 94 * 1024 ** 2,
       }),
     ).toBe("312 versions · 11.7 GB of history, kept in 94 MB");
+  });
+});
+
+describe("formatSessionSpan", () => {
+  const at = (h: number, m: number) => new Date(2026, 10, 15, h, m).getTime() / 1000;
+
+  it("says the meridiem once so the span fits its column", () => {
+    const span = formatSessionSpan(at(14, 22), at(14, 37));
+    expect(span).toContain("–");
+    // The old format repeated "PM" twice and got ellipsized away.
+    expect(span.match(/[AP]M/g)?.length ?? 0).toBeLessThanOrEqual(1);
+    expect(span.length).toBeLessThan(22);
+  });
+
+  it("falls back to a plain date once a session is old enough", () => {
+    const old = new Date(2020, 0, 2, 9, 0).getTime() / 1000;
+    expect(formatSessionSpan(old, old + 600)).not.toContain("–");
   });
 });

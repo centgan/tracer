@@ -40,7 +40,7 @@
      run longer than author names. Declared once so TimelineRow and the
      session-toggle row never drift apart. The spine column never collapses -
      it's the one thing every row keeps at every width. */
-  --timeline-grid: 20px minmax(8em, 3fr) 9.5em 4.5em minmax(4em, 1fr) 2.5em;
+  --timeline-grid: 22px 11.75em minmax(6em, 3fr) minmax(4em, 1fr) 2.5em;
 
   /* Bevels as tokens, so a theme can flatten them without rewriting every
      component. A look that isn't imitating system chrome needs them gone. */
@@ -202,7 +202,7 @@ input[type="email"] {
    them - author first, then size. The label and time always survive. */
 @media (max-width: 1000px) {
   :root {
-    --timeline-grid: 20px minmax(8em, 3fr) 9.5em 4.5em 0 2.5em;
+    --timeline-grid: 22px 11.75em minmax(6em, 3fr) 0 2.5em;
   }
 }
 
@@ -210,7 +210,7 @@ input[type="email"] {
   :root {
     /* An unnamed version carries its time in the label, so the label needs
        room for a full timestamp before the (then empty) time column gets any. */
-    --timeline-grid: 20px minmax(9.5em, 3fr) 9em 0 0 2.5em;
+    --timeline-grid: 22px 11.75em minmax(5em, 3fr) 0 2.5em;
   }
 }
 
@@ -230,49 +230,55 @@ input[type="email"] {
 
 .spine-line {
   position: absolute;
-  inset: 0 auto 0 50%;
+  inset: 0 auto 0 6px;
   width: 1px;
-  transform: translateX(-50%);
   background: currentColor;
-  opacity: 0.25;
+  opacity: 0.3;
 }
 
 /* Quiet periods get a fainter, dashed line instead of the solid one. */
 .spine-line.dashed {
   background: none;
   border-left: 1px dashed currentColor;
-  opacity: 0.35;
+  opacity: 0.4;
 }
 
+/* Versions read as graduations on a rule rather than symbols scattered in a
+   column: a tick crossing the line, longer and heavier when the version is
+   named. Geometry, not glyphs. */
 .spine-mark {
   position: absolute;
   top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 5px;
-  height: 5px;
+  left: 3px;
+  width: 8px;
+  height: 1px;
+  transform: translateY(-50%);
   background: currentColor;
+  opacity: 0.55;
 }
 
-/* A named version's mark is heavier - a second way of spotting it, on top of
-   the star already in the label. */
 .spine-mark.named {
-  width: 9px;
-  height: 9px;
+  left: 1px;
+  width: 13px;
+  height: 3px;
+  opacity: 1;
 }
 
+/* A session is a stretch of sustained work, so it reads as a solid run down
+   the rule rather than as separate marks - its weight carries how much
+   happened. */
 .spine-ticks {
   position: absolute;
-  inset: 0;
+  inset: 2px auto 2px 4px;
+  width: 5px;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 1px;
+  flex-direction: column;
+  justify-content: space-between;
 }
 
 .spine-ticks .tick {
-  width: 2px;
-  height: 9px;
+  width: 100%;
+  height: 2px;
   background: currentColor;
-  opacity: 0.55;
+  opacity: 0.6;
 }

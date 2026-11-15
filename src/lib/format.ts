@@ -65,7 +65,15 @@ export function formatSessionSpan(startUnixSeconds: number, endUnixSeconds: numb
   const end = new Date(endUnixSeconds * 1000);
   const { text, withTime } = dayLabel(start, new Date());
   if (!withTime) return text;
-  const startTime = start.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  const endTime = end.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  return `${text} ${startTime} – ${endTime}`;
+  // "today 02:22 PM – 02:37 PM" is too long for the time column and gets
+  // ellipsized, which loses the end of the span entirely. A session never
+  // crosses midday in practice (it's bounded by SESSION_GAP_SECONDS), so the
+  // meridiem is said once, at the end.
+  const hhmm = (d: Date) =>
+    d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).replace(/\s*[AaPp]\.?[Mm]\.?$/, "");
+  const meridiem = end
+    .toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+    .slice(hhmm(end).length)
+    .trim();
+  return `${text} ${hhmm(start)}–${hhmm(end)}${meridiem ? ` ${meridiem}` : ""}`;
 }

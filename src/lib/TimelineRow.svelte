@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Revision } from "./types";
-  import { formatBytes, formatRelativeTime } from "./format";
+  import { formatRelativeTime } from "./format";
 
   let {
     revision,
@@ -27,18 +27,17 @@
       <span class="spine-line"></span>
       <span class="spine-mark" class:named={!!revision.milestone}></span>
     </span>
+    <!-- The time is always in the same column. It used to swap places with the
+         name, so the first column meant "name" on some rows and "when" on
+         others and you had to re-read every line to know which. -->
+    <span class="time">{formatRelativeTime(revision.timestamp)}</span>
     <!-- A long name ellipsizes in a narrow window; the tooltip is the only way
          to read the rest of it. -->
-    <span
-      class="label"
-      class:named={!!revision.milestone}
-      title={revision.milestone ?? undefined}
-    >
-      {#if revision.milestone}<span class="star" aria-hidden="true">★</span>{/if}
-      {revision.milestone ?? formatRelativeTime(revision.timestamp)}
+    <span class="name" title={revision.milestone ?? undefined}>
+      {#if revision.milestone}
+        <span class="star" aria-hidden="true">★</span>{revision.milestone}
+      {/if}
     </span>
-    <span class="time">{revision.milestone ? formatRelativeTime(revision.timestamp) : ""}</span>
-    <span class="size">{formatBytes(revision.byteSize)}</span>
     <span class="author" title={revision.authorEmail ?? undefined}>
       {revision.authorName ?? ""}
     </span>
@@ -78,32 +77,25 @@
     background: var(--flash);
   }
 
-  .label {
+  .name {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .label.named {
     font-weight: bold;
   }
 
-  .time,
-  .size,
-  .author {
+  .star {
+    margin-right: 4px;
+  }
+
+  .time {
     font-family: var(--data);
     font-size: 11px;
   }
 
-  .size {
-    text-align: right;
-    /* Collapses to a zero-width track in a narrow window (see theme.css);
-       without this its text would spill into the next column. */
-    overflow: hidden;
-  }
-
   .author {
+    font-size: 11px;
     font-family: var(--ui);
     overflow: hidden;
     text-overflow: ellipsis;

@@ -190,16 +190,18 @@
                     {/each}
                   </span>
                 </span>
-                <span class="session-label">
-                  <span class="chevron" class:open={isOpen(group)} aria-hidden="true">▸</span>
-                  {group.revisions.length} saves
-                </span>
+                <!-- Same column order as a version row: when it happened, then
+                     what it was. The time column always holds a time. -->
                 <span class="session-span"
                   >{formatSessionSpan(
                     group.revisions[group.revisions.length - 1].timestamp,
                     group.revisions[0].timestamp,
                   )}</span
                 >
+                <span class="session-label">
+                  <span class="chevron" class:open={isOpen(group)} aria-hidden="true">▸</span>
+                  {group.revisions.length} saves
+                </span>
               </button>
               {#if isOpen(group)}
                 <!-- Unindented: these rows share the spine's x position with
@@ -365,7 +367,8 @@
   }
 
   .session-span {
-    grid-column: 3 / span 2;
+    grid-column: 2;
+    font-size: 11px;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;

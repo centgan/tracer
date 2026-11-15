@@ -3,7 +3,7 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import * as api from "$lib/api";
-  import type { FileWithLastChanged, Loadable, Revision, Vault } from "$lib/types";
+  import type { FileStats, FileWithLastChanged, Loadable, Revision, Vault } from "$lib/types";
   import FoldersPane from "$lib/FoldersPane.svelte";
   import FilesPane from "$lib/FilesPane.svelte";
   import TimelinePane from "$lib/TimelinePane.svelte";
@@ -27,6 +27,7 @@
 
   // `null` means "no file picked yet".
   let revisions = $state<Loadable<Revision[]> | null>(null);
+  let fileStats = $state<Loadable<FileStats> | null>(null);
 
   let justArrivedId = $state<number | null>(null);
 
@@ -67,6 +68,7 @@
     selectedVaultId = id;
     selectedFileId = null;
     revisions = null;
+    fileStats = null;
     files = { status: "loading" };
     try {
       files = { status: "loaded", data: await loadFilesEnriched(id) };
@@ -87,10 +89,16 @@
   async function selectFile(id: number) {
     selectedFileId = id;
     revisions = { status: "loading" };
+    fileStats = { status: "loading" };
     try {
       revisions = { status: "loaded", data: await api.getTimeline(id) };
     } catch (e) {
       revisions = { status: "error", message: errorMessage(e) };
+    }
+    try {
+      fileStats = { status: "loaded", data: await api.getFileStats(id) };
+    } catch (e) {
+      fileStats = { status: "error", message: errorMessage(e) };
     }
   }
 
@@ -100,6 +108,15 @@
       revisions = { status: "loaded", data: await api.getTimeline(selectedFileId) };
     } catch (e) {
       revisions = { status: "error", message: errorMessage(e) };
+    }
+  }
+
+  async function refreshFileStats() {
+    if (selectedFileId === null) return;
+    try {
+      fileStats = { status: "loaded", data: await api.getFileStats(selectedFileId) };
+    } catch (e) {
+      fileStats = { status: "error", message: errorMessage(e) };
     }
   }
 
@@ -146,6 +163,7 @@
       refreshFiles();
       if (fileId === selectedFileId) {
         refreshTimeline();
+        refreshFileStats();
         justArrivedId = revisionId;
         setTimeout(() => {
           if (justArrivedId === revisionId) justArrivedId = null;
@@ -184,6 +202,7 @@
     <TimelinePane
       {selectedFile}
       {revisions}
+      {fileStats}
       {justArrivedId}
       onSetMilestone={handleSetMilestone}
       onSaveCopy={handleSaveCopy}
@@ -212,12 +231,12 @@
     padding: 0 10px;
     /* The one loud element in the app, straight out of Windows 95: a navy-
        to-blue gradient behind white bold text. Everything below stays quiet. */
-    background: linear-gradient(to right, var(--title-a), var(--title-b));
+    background: var(--title-fill);
     border-bottom: 1px solid var(--edge);
   }
 
   .title-bar-text {
-    color: #fff;
+    color: var(--title-ink);
     font-size: 13px;
     font-weight: bold;
     letter-spacing: 0.02em;

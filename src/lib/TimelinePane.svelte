@@ -1,18 +1,21 @@
 <script lang="ts">
-  import type { FileWithLastChanged, Loadable, Revision } from "./types";
+  import type { FileStats, FileWithLastChanged, Loadable, Revision } from "./types";
   import TimelineRow from "./TimelineRow.svelte";
   import { groupIntoSessions } from "./sessions";
-  import { formatSessionSpan } from "./format";
+  import { findGaps, sessionTickCount } from "./spine";
+  import { formatFileStats, formatSessionSpan } from "./format";
 
   let {
     selectedFile,
     revisions,
+    fileStats,
     justArrivedId,
     onSetMilestone,
     onSaveCopy,
   }: {
     selectedFile: FileWithLastChanged | null;
     revisions: Loadable<Revision[]> | null;
+    fileStats: Loadable<FileStats> | null;
     justArrivedId: number | null;
     onSetMilestone: (revisionId: number, label: string) => Promise<void>;
     onSaveCopy: (revisionId: number) => Promise<string>;
@@ -21,6 +24,10 @@
   let groups = $derived(
     revisions && revisions.status === "loaded" ? groupIntoSessions(revisions.data) : [],
   );
+
+  // Keyed by "render the gap after this group index" so the template can
+  // check it in the same pass it renders each group.
+  let gapAfter = $derived(new Map(findGaps(groups).map((g) => [g.afterIndex, g.label])));
 
   // A group is open if the user toggled it explicitly (`override`), else it
   // falls back to its default: the newest group (so a live-arriving version
@@ -144,6 +151,9 @@
 <section class="pane">
   <div class="pane-header">
     <h2>{selectedFile ? selectedFile.relativePath : "Timeline"}</h2>
+    {#if fileStats?.status === "loaded" && revisions?.status === "loaded" && revisions.data.length > 0}
+      <p class="stats-line">{formatFileStats(fileStats.data)}</p>
+    {/if}
   </div>
 
   <div class="well">
@@ -157,7 +167,7 @@
       <p class="hint pad">No versions yet. Save this file to start its history.</p>
     {:else}
       <ul class="rows">
-        {#each groups as group (group.id)}
+        {#each groups as group, i (group.id)}
           {#if group.revisions.length === 1}
             <TimelineRow
               revision={group.revisions[0]}
@@ -172,6 +182,14 @@
                 aria-expanded={isOpen(group)}
                 onclick={() => toggle(group)}
               >
+                <span class="spine" aria-hidden="true">
+                  <span class="spine-line"></span>
+                  <span class="spine-ticks">
+                    {#each Array(sessionTickCount(group.revisions.length)) as _}
+                      <span class="tick"></span>
+                    {/each}
+                  </span>
+                </span>
                 <span class="session-label">
                   <span class="chevron" class:open={isOpen(group)} aria-hidden="true">▸</span>
                   {group.revisions.length} saves
@@ -184,7 +202,10 @@
                 >
               </button>
               {#if isOpen(group)}
-                <ul class="rows nested">
+                <!-- Unindented: these rows share the spine's x position with
+                     every other row, so the vertical line stays unbroken
+                     instead of jumping sideways. -->
+                <ul class="rows">
                   {#each group.revisions as revision (revision.id)}
                     <TimelineRow
                       {revision}
@@ -195,6 +216,14 @@
                   {/each}
                 </ul>
               {/if}
+            </li>
+          {/if}
+          {#if gapAfter.has(i)}
+            <li class="gap-row">
+              <span class="spine" aria-hidden="true">
+                <span class="spine-line dashed"></span>
+              </span>
+              <span class="gap-label">{gapAfter.get(i)}</span>
             </li>
           {/if}
         {/each}
@@ -245,6 +274,13 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  /* A quiet fact, not a banner: same size and weight as the hint text
+     elsewhere, no colour, no emphasis. */
+  .stats-line {
+    font-size: 11px;
+    opacity: 0.72;
   }
 
   .pad {
@@ -329,7 +365,7 @@
   }
 
   .session-span {
-    grid-column: 2 / span 2;
+    grid-column: 3 / span 2;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -339,8 +375,20 @@
     opacity: 0.75;
   }
 
-  .rows.nested {
-    padding-left: 16px;
+  .gap-row {
+    display: grid;
+    grid-template-columns: var(--timeline-grid);
+    align-items: center;
+    column-gap: 12px;
+    min-height: 28px;
+    padding: 3px 8px;
+  }
+
+  .gap-label {
+    grid-column: 2 / -1;
+    font-size: 11px;
+    font-style: italic;
+    opacity: 0.6;
   }
 
   .actions {

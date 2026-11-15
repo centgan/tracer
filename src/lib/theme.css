@@ -1,3 +1,5 @@
+@import "./theme-variants.css";
+
 /* Platinum/Windows-95 token sheet. DESIGN.md owns the values; this file is
    the single place they're declared so bevels aren't hand-rolled per
    component. */
@@ -22,18 +24,36 @@
 
   --title-a: #000080;
   --title-b: #1084d0;
+  /* The whole title-bar background, so a theme can swap a gradient for a
+     pattern without touching the markup. */
+  --title-fill: linear-gradient(to right, var(--title-a), var(--title-b));
+  --title-ink: #ffffff;
   --folder: #e0a33c;
   --doc: #2b579a;
   --sheet: #217346;
   --deck: #b7472a;
 
-  /* Shared column grid for the timeline: label, time, size, author, and a
-     trailing "new" flag. Time/size are sized for their worst-case text
-     ("6 days ago 12:50 PM", "999.9 MB"); label and author split what's left,
-     weighted toward the label since version names run longer than author
-     names. Declared once so TimelineRow and the session-toggle row never
-     drift apart. */
-  --timeline-grid: minmax(6em, 2fr) 10.5em 4.5em minmax(4em, 1fr) 2.5em;
+  /* Shared column grid for the timeline: a leading spine gutter, then label,
+     time, size, author, and a trailing "new" flag. Time/size are sized for
+     their worst-case text ("6 days ago 12:50 PM", "999.9 MB"); label and
+     author split what's left, weighted toward the label since version names
+     run longer than author names. Declared once so TimelineRow and the
+     session-toggle row never drift apart. The spine column never collapses -
+     it's the one thing every row keeps at every width. */
+  --timeline-grid: 20px minmax(8em, 3fr) 9.5em 4.5em minmax(4em, 1fr) 2.5em;
+
+  /* Bevels as tokens, so a theme can flatten them without rewriting every
+     component. A look that isn't imitating system chrome needs them gone. */
+  --bevel-raised:
+    inset 1px 1px 0 var(--light),
+    inset 2px 2px 0 var(--face-light),
+    inset -1px -1px 0 var(--shade),
+    inset -2px -2px 0 var(--face-dark);
+  --bevel-sunken:
+    inset 1px 1px 0 var(--shade),
+    inset 2px 2px 0 var(--face-dark);
+  --frame: 1px solid var(--edge);
+  --radius: 0;
 
   --ui: Geneva, "MS Sans Serif", Verdana, sans-serif;
   --data: Monaco, "Courier New", monospace;
@@ -64,6 +84,8 @@
        dark chrome instead of sinking into it. */
     --title-a: #0c1f6e;
     --title-b: #2fa0e0;
+    --title-fill: linear-gradient(to right, var(--title-a), var(--title-b));
+    --title-ink: #ffffff;
     --folder: #e8b457;
     --doc: #4d8fd1;
     --sheet: #3ba86a;
@@ -94,12 +116,9 @@ p {
 button {
   appearance: none;
   background: var(--face);
-  border: 1px solid var(--edge);
-  box-shadow:
-    inset 1px 1px 0 var(--light),
-    inset 2px 2px 0 var(--face-light),
-    inset -1px -1px 0 var(--shade),
-    inset -2px -2px 0 var(--face-dark);
+  border: var(--frame);
+  border-radius: var(--radius);
+  box-shadow: var(--bevel-raised);
   color: var(--ink);
   font: inherit;
   font-size: 13px;
@@ -113,9 +132,7 @@ button:hover:not(:disabled) {
 }
 
 button:active:not(:disabled) {
-  box-shadow:
-    inset 1px 1px 0 var(--shade),
-    inset 2px 2px 0 var(--face-dark);
+  box-shadow: var(--bevel-sunken);
 }
 
 button:disabled {
@@ -142,10 +159,9 @@ input[type="email"] {
   font: inherit;
   color: var(--ink);
   background: var(--well);
-  border: 1px solid var(--edge);
-  box-shadow:
-    inset 1px 1px 0 var(--shade),
-    inset 2px 2px 0 var(--face-dark);
+  border: var(--frame);
+  border-radius: var(--radius);
+  box-shadow: var(--bevel-sunken);
   padding: 3px 6px;
   min-height: 24px;
 }
@@ -153,11 +169,9 @@ input[type="email"] {
 /* Sunken well: list panes, text fields. */
 .well {
   background: var(--well);
-  border: 1px solid var(--edge);
-  box-shadow:
-    inset 1px 1px 0 var(--shade),
-    inset 2px 2px 0 var(--face-dark),
-    inset -1px -1px 0 var(--light);
+  border: var(--frame);
+  border-radius: var(--radius);
+  box-shadow: var(--bevel-sunken);
 }
 
 .hint {
@@ -188,7 +202,7 @@ input[type="email"] {
    them - author first, then size. The label and time always survive. */
 @media (max-width: 1000px) {
   :root {
-    --timeline-grid: minmax(6em, 2fr) 10.5em 4.5em 0 2.5em;
+    --timeline-grid: 20px minmax(8em, 3fr) 9.5em 4.5em 0 2.5em;
   }
 }
 
@@ -196,6 +210,69 @@ input[type="email"] {
   :root {
     /* An unnamed version carries its time in the label, so the label needs
        room for a full timestamp before the (then empty) time column gets any. */
-    --timeline-grid: minmax(9.5em, 3fr) 9em 0 0 2.5em;
+    --timeline-grid: 20px minmax(9.5em, 3fr) 9em 0 0 2.5em;
   }
+}
+
+/* The activity spine: a continuous vertical line down the timeline's leading
+   column, with a mark per version and a density cluster per session. Shared
+   here (not scoped per component) for the same reason as --timeline-grid -
+   TimelineRow's per-version mark and TimelinePane's session/gap rows must
+   never drift apart. Kept monochrome (--ink only) per DESIGN.md: colour
+   always means something, and this is structure, not a fourth colour. */
+.spine {
+  position: relative;
+  /* The row's own `align-items: center` would otherwise shrink this cell to
+     its content height; stretching it is what makes the line meet the next
+     row's line with no visible break. */
+  align-self: stretch;
+}
+
+.spine-line {
+  position: absolute;
+  inset: 0 auto 0 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: currentColor;
+  opacity: 0.25;
+}
+
+/* Quiet periods get a fainter, dashed line instead of the solid one. */
+.spine-line.dashed {
+  background: none;
+  border-left: 1px dashed currentColor;
+  opacity: 0.35;
+}
+
+.spine-mark {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 5px;
+  height: 5px;
+  background: currentColor;
+}
+
+/* A named version's mark is heavier - a second way of spotting it, on top of
+   the star already in the label. */
+.spine-mark.named {
+  width: 9px;
+  height: 9px;
+}
+
+.spine-ticks {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+}
+
+.spine-ticks .tick {
+  width: 2px;
+  height: 9px;
+  background: currentColor;
+  opacity: 0.55;
 }

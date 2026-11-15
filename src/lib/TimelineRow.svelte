@@ -23,6 +23,10 @@
     aria-pressed={selected}
     onclick={() => onSelect(revision.id)}
   >
+    <span class="spine" aria-hidden="true">
+      <span class="spine-line"></span>
+      <span class="spine-mark" class:named={!!revision.milestone}></span>
+    </span>
     <!-- A long name ellipsizes in a narrow window; the tooltip is the only way
          to read the rest of it. -->
     <span

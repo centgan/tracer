@@ -1,7 +1,7 @@
 use rusqlite::{params, Connection, OptionalExtension, Result};
 use std::path::{Path, PathBuf};
 
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -57,6 +57,14 @@ pub struct Revision {
     pub manifest_hash: String,
     pub part_count: i64,
     pub milestone: Option<String>,
+    /// Null for versions recorded before attribution existed, or on a device
+    /// with no identity set - never invented after the fact.
+    pub author_name: Option<String>,
+    pub author_email: Option<String>,
+    /// The file's previous revision at the time this one was recorded, or
+    /// `None` for a file's first version. Versions form a graph, not a list
+    /// (project_plan.md's Collaboration model), and this is the edge.
+    pub parent_id: Option<i64>,
 }
 
 /// Initializes the local database, running any pending schema migrations.
@@ -76,6 +84,10 @@ fn run_migrations(conn: &Connection) -> Result<()> {
 
     if user_version < 2 {
         migrate_to_v2(conn)?;
+    }
+
+    if user_version < 3 {
+        migrate_to_v3(conn)?;
     }
 
     Ok(())
@@ -145,6 +157,30 @@ fn migrate_to_v2(conn: &Connection) -> Result<()> {
         CREATE INDEX idx_revisions_file_id ON revisions(file_id);
         CREATE INDEX idx_revision_parts_object_hash ON revision_parts(object_hash);
         CREATE INDEX idx_files_vault_id ON files(vault_id);
+        ",
+    )?;
+
+    // Literal 2, not SCHEMA_VERSION: this migration only brings a database up
+    // to the v2 shape. run_migrations re-checks the original version against
+    // each threshold, so migrate_to_v3 still runs right after this in the
+    // same startup when needed.
+    conn.pragma_update(None, "user_version", 2)?;
+
+    Ok(())
+}
+
+/// Adds attribution columns without touching existing data. Unlike v1→v2,
+/// real version history exists now, so dropping and recreating tables (as v2
+/// did for scaffold data) is no longer acceptable - ALTER TABLE ADD COLUMN
+/// preserves every row. All three columns are nullable: a version recorded
+/// before this migration genuinely has no author, and a file's first version
+/// has no parent - NULL is the honest answer, not an invented value.
+fn migrate_to_v3(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        ALTER TABLE revisions ADD COLUMN author_name TEXT;
+        ALTER TABLE revisions ADD COLUMN author_email TEXT;
+        ALTER TABLE revisions ADD COLUMN parent_id INTEGER REFERENCES revisions(id);
         ",
     )?;
 
@@ -281,37 +317,56 @@ pub fn list_tracked_files(conn: &Connection, vault_id: i64) -> Result<Vec<Tracke
     rows.collect()
 }
 
-/// Returns the manifest_hash of the newest revision (by timestamp, then id)
-/// for the given file, if any revisions exist.
-pub fn latest_manifest_hash(conn: &Connection, file_id: i64) -> Result<Option<String>> {
+/// Returns the id and manifest_hash of the newest revision (by timestamp,
+/// then id) for the given file, if any exist. Both the no-op-resave check
+/// (the hash) and the next revision's parent pointer (the id) need the same
+/// "newest" row, so one query serves both rather than letting two copies of
+/// the ordering drift apart.
+pub fn latest_revision(conn: &Connection, file_id: i64) -> Result<Option<(i64, String)>> {
     conn.query_row(
-        "SELECT manifest_hash FROM revisions WHERE file_id = ?1
+        "SELECT id, manifest_hash FROM revisions WHERE file_id = ?1
          ORDER BY timestamp DESC, id DESC LIMIT 1",
         params![file_id],
-        |row| row.get(0),
+        |row| Ok((row.get(0)?, row.get(1)?)),
     )
     .optional()
 }
 
+/// Groups `insert_revision`'s parameters so author and parent can't be
+/// mis-ordered against the other, same-typed arguments at the call site.
+pub struct NewRevision<'a> {
+    pub file_id: i64,
+    pub timestamp: i64,
+    pub byte_size: i64,
+    pub manifest_hash: &'a str,
+    pub parts: &'a [PartRecord],
+    pub objects: &'a [ObjectRecord],
+    pub author_name: Option<&'a str>,
+    pub author_email: Option<&'a str>,
+    pub parent_id: Option<i64>,
+}
+
 /// Inserts a new revision along with its parts and any not-yet-known
 /// objects, all within a single transaction.
-pub fn insert_revision(
-    conn: &mut Connection,
-    file_id: i64,
-    timestamp: i64,
-    byte_size: i64,
-    manifest_hash: &str,
-    parts: &[PartRecord],
-    objects: &[ObjectRecord],
-) -> Result<i64> {
+pub fn insert_revision(conn: &mut Connection, new: NewRevision) -> Result<i64> {
     let tx = conn.transaction()?;
 
     tx.execute(
-        "INSERT INTO revisions (file_id, timestamp, byte_size, manifest_hash) VALUES (?1, ?2, ?3, ?4)",
-        params![file_id, timestamp, byte_size, manifest_hash],
+        "INSERT INTO revisions (file_id, timestamp, byte_size, manifest_hash, author_name, author_email, parent_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            new.file_id,
+            new.timestamp,
+            new.byte_size,
+            new.manifest_hash,
+            new.author_name,
+            new.author_email,
+            new.parent_id
+        ],
     )?;
 
     let revision_id = tx.last_insert_rowid();
+    let (parts, objects) = (new.parts, new.objects);
 
     for object in objects {
         tx.execute(
@@ -343,7 +398,7 @@ pub fn get_timeline(conn: &Connection, file_id: i64) -> Result<Vec<Revision>> {
     let mut stmt = conn.prepare(
         "SELECT r.id, r.file_id, r.timestamp, r.byte_size, r.manifest_hash,
                 (SELECT COUNT(*) FROM revision_parts rp WHERE rp.revision_id = r.id) AS part_count,
-                m.label
+                m.label, r.author_name, r.author_email, r.parent_id
          FROM revisions r
          LEFT JOIN milestones m ON m.revision_id = r.id
          WHERE r.file_id = ?1
@@ -359,6 +414,9 @@ pub fn get_timeline(conn: &Connection, file_id: i64) -> Result<Vec<Revision>> {
             manifest_hash: row.get(4)?,
             part_count: row.get(5)?,
             milestone: row.get(6)?,
+            author_name: row.get(7)?,
+            author_email: row.get(8)?,
+            parent_id: row.get(9)?,
         })
     })?;
 
@@ -424,6 +482,94 @@ mod tests {
 
     /// Scratch space for tests, kept inside the project under `target/` rather
     /// than the OS temp directory, so a test run leaves nothing outside the repo.
+    /// Migrates a copy of a REAL database, not a synthetic one.
+    ///
+    /// Real history has shapes test fixtures don't: revisions whose files were
+    /// renamed, objects shared across versions, a WAL mid-checkpoint. A
+    /// migration that drops rows is the worst failure this project has - the
+    /// history IS the product - so every schema change should be run against an
+    /// actual `tracer.db` before it ships.
+    ///
+    /// `TRACER_DB_UNDER_TEST=~/Library/Application\ Support/com.ericfeng.tracer/tracer.db \
+    ///   cargo test --lib migrating_a_real_database -- --ignored --nocapture`
+    ///
+    /// Always operates on a copy; the source file is never opened for writing.
+    #[test]
+    #[ignore]
+    fn migrating_a_real_database_preserves_every_row() {
+        let Ok(source) = std::env::var("TRACER_DB_UNDER_TEST") else {
+            panic!("set TRACER_DB_UNDER_TEST to a real tracer.db to migrate a copy of");
+        };
+
+        let scratch = {
+            let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/test-tmp");
+            std::fs::create_dir_all(&root).expect("creating scratch directory");
+            tempfile::TempDir::new_in(root).expect("creating scratch directory")
+        };
+        let copy = scratch.path().join("tracer.db");
+        std::fs::copy(&source, &copy).expect("copying the database under test");
+
+        let counts = |conn: &Connection| -> Vec<(String, i64)> {
+            ["vaults", "files", "objects", "revisions", "revision_parts", "milestones"]
+                .iter()
+                .map(|table| {
+                    let n: i64 = conn
+                        .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get(0))
+                        .unwrap_or(-1);
+                    (table.to_string(), n)
+                })
+                .collect()
+        };
+
+        let (before, version_before) = {
+            let conn = Connection::open(&copy).expect("opening the copy");
+            let version: i64 = conn
+                .query_row("PRAGMA user_version", [], |row| row.get(0))
+                .unwrap();
+            (counts(&conn), version)
+        };
+
+        let conn = init_db(&copy).expect("migrating the copy");
+
+        let version_after: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version_after, SCHEMA_VERSION);
+
+        let after = counts(&conn);
+        assert_eq!(
+            before, after,
+            "the migration lost or invented rows: {before:?} -> {after:?}"
+        );
+
+        // Every pre-existing revision must still be readable through the normal
+        // query path, with the new columns honestly empty rather than invented.
+        let file_ids: Vec<i64> = conn
+            .prepare("SELECT id FROM files")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_>>()
+            .unwrap();
+
+        let mut seen = 0;
+        for file_id in file_ids {
+            for revision in get_timeline(&conn, file_id).expect("reading a migrated timeline") {
+                assert!(revision.timestamp > 0);
+                seen += 1;
+            }
+        }
+        assert_eq!(
+            seen as i64,
+            after.iter().find(|(t, _)| t == "revisions").unwrap().1,
+            "some migrated versions are no longer reachable from any file"
+        );
+
+        println!(
+            "migrated schema v{version_before} -> v{version_after}, preserved {seen} versions: {after:?}"
+        );
+    }
+
     fn temp_file() -> NamedTempFile {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/test-tmp");
         std::fs::create_dir_all(&root).expect("creating test scratch directory");
@@ -434,6 +580,29 @@ mod tests {
         let file = temp_file();
         let conn = init_db(file.path()).expect("init db");
         (file, conn)
+    }
+
+    /// A `NewRevision` with no author or parent, for tests that don't care
+    /// about attribution. Override fields with `..new_revision(...)`.
+    fn new_revision<'a>(
+        file_id: i64,
+        timestamp: i64,
+        byte_size: i64,
+        manifest_hash: &'a str,
+        parts: &'a [PartRecord],
+        objects: &'a [ObjectRecord],
+    ) -> NewRevision<'a> {
+        NewRevision {
+            file_id,
+            timestamp,
+            byte_size,
+            manifest_hash,
+            parts,
+            objects,
+            author_name: None,
+            author_email: None,
+            parent_id: None,
+        }
     }
 
     #[test]
@@ -552,8 +721,9 @@ mod tests {
             },
         ];
 
-        let revision_id = insert_revision(&mut conn, file_id, 1000, 240, "manifest_1", &parts, &objects)
-            .unwrap();
+        let revision_id =
+            insert_revision(&mut conn, new_revision(file_id, 1000, 240, "manifest_1", &parts, &objects))
+                .unwrap();
 
         let fetched = get_revision_parts(&conn, revision_id).unwrap();
         assert_eq!(fetched.len(), 3);
@@ -607,7 +777,8 @@ mod tests {
 
         let vault = add_vault(&conn, "/a/foo").unwrap();
         let file_id = upsert_file(&conn, vault.id, "decks/deck.pptx", "pptx").unwrap();
-        let revision_id = insert_revision(&mut conn, file_id, 1000, 10, "m1", &[], &[]).unwrap();
+        let revision_id =
+            insert_revision(&mut conn, new_revision(file_id, 1000, 10, "m1", &[], &[])).unwrap();
 
         let target = get_revision_target(&conn, revision_id).unwrap().unwrap();
         assert_eq!(target.id, file_id);
@@ -621,18 +792,94 @@ mod tests {
     }
 
     #[test]
-    fn latest_manifest_hash_picks_newest_by_timestamp_then_id() {
+    fn latest_revision_picks_newest_by_timestamp_then_id() {
         let (_file, mut conn) = temp_db();
 
         let vault = add_vault(&conn, "/a/foo").unwrap();
         let file_id = upsert_file(&conn, vault.id, "deck.pptx", "pptx").unwrap();
 
-        assert_eq!(latest_manifest_hash(&conn, file_id).unwrap(), None);
+        assert_eq!(latest_revision(&conn, file_id).unwrap(), None);
 
-        insert_revision(&mut conn, file_id, 1000, 10, "m1", &[], &[]).unwrap();
-        insert_revision(&mut conn, file_id, 2000, 10, "m2", &[], &[]).unwrap();
-        insert_revision(&mut conn, file_id, 2000, 10, "m3", &[], &[]).unwrap();
+        insert_revision(&mut conn, new_revision(file_id, 1000, 10, "m1", &[], &[])).unwrap();
+        insert_revision(&mut conn, new_revision(file_id, 2000, 10, "m2", &[], &[])).unwrap();
+        let m3 = insert_revision(&mut conn, new_revision(file_id, 2000, 10, "m3", &[], &[])).unwrap();
 
-        assert_eq!(latest_manifest_hash(&conn, file_id).unwrap(), Some("m3".to_string()));
+        assert_eq!(latest_revision(&conn, file_id).unwrap(), Some((m3, "m3".to_string())));
+    }
+
+    #[test]
+    fn first_version_has_no_parent_second_points_to_first() {
+        let (_file, mut conn) = temp_db();
+
+        let vault = add_vault(&conn, "/a/foo").unwrap();
+        let file_id = upsert_file(&conn, vault.id, "deck.pptx", "pptx").unwrap();
+
+        let first_id = insert_revision(&mut conn, new_revision(file_id, 1000, 10, "m1", &[], &[])).unwrap();
+        let second_id = insert_revision(
+            &mut conn,
+            NewRevision {
+                parent_id: Some(first_id),
+                ..new_revision(file_id, 2000, 10, "m2", &[], &[])
+            },
+        )
+        .unwrap();
+
+        let timeline = get_timeline(&conn, file_id).unwrap();
+        assert_eq!(timeline[0].id, second_id);
+        assert_eq!(timeline[0].parent_id, Some(first_id));
+        assert_eq!(timeline[1].id, first_id);
+        assert_eq!(timeline[1].parent_id, None);
+    }
+
+    /// The v1→v2 migration could drop every table because v1 only ever held
+    /// scaffold data. v2 databases hold real version history now, so v3 must
+    /// add its columns without losing a single existing row.
+    #[test]
+    fn migrate_to_v3_preserves_existing_revisions() {
+        let file = temp_file();
+
+        {
+            // Build a v2-shaped database directly - going through the public
+            // init_db would already land on v3, leaving nothing for the
+            // migration under test to actually do.
+            let conn = Connection::open(file.path()).unwrap();
+            migrate_to_v2(&conn).unwrap();
+
+            let vault = add_vault(&conn, "/a/foo").unwrap();
+            conn.execute(
+                "INSERT INTO files (vault_id, relative_path, extension) VALUES (?1, 'deck.pptx', 'pptx')",
+                params![vault.id],
+            )
+            .unwrap();
+            let file_id: i64 = conn
+                .query_row(
+                    "SELECT id FROM files WHERE vault_id = ?1",
+                    params![vault.id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            conn.execute(
+                "INSERT INTO revisions (file_id, timestamp, byte_size, manifest_hash)
+                 VALUES (?1, 1000, 10, 'm1')",
+                params![file_id],
+            )
+            .unwrap();
+        }
+
+        let conn = init_db(file.path()).expect("migrating v2 -> v3 must not fail or lose data");
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+
+        let file_id: i64 = conn
+            .query_row("SELECT id FROM files", [], |row| row.get(0))
+            .unwrap();
+        let timeline = get_timeline(&conn, file_id).unwrap();
+        assert_eq!(timeline.len(), 1, "the pre-existing revision must survive the migration");
+        assert_eq!(timeline[0].manifest_hash, "m1");
+        assert_eq!(timeline[0].author_name, None);
+        assert_eq!(timeline[0].author_email, None);
+        assert_eq!(timeline[0].parent_id, None);
     }
 }

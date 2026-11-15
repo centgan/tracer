@@ -1,6 +1,7 @@
 <script lang="ts">
   import * as api from "./api";
-  import type { Loadable } from "./types";
+  import type { Identity, Loadable } from "./types";
+  import { shouldShowIdentityNudge } from "./identity";
 
   let { watchedCount }: { watchedCount: number | null } = $props();
 
@@ -12,6 +13,18 @@
   // error, because an error status disables the control - which would leave the
   // user unable to retry the very thing that just failed.
   let autostartError = $state<string | null>(null);
+
+  let identity = $state<Loadable<Identity>>({ status: "loading" });
+  let nameDraft = $state("");
+  let emailDraft = $state("");
+  let identitySaving = $state(false);
+  // Same reasoning as autostartError: a failed save stays beside the inputs
+  // so the user can immediately fix and retry, rather than locking the form.
+  let identityError = $state<string | null>(null);
+
+  let showIdentityNudge = $derived(
+    identity.status === "loaded" && shouldShowIdentityNudge(identity.data, watchedCount),
+  );
 
   function errorMessage(e: unknown): string {
     return e instanceof Error ? e.message : String(e);
@@ -39,6 +52,35 @@
     }
   }
 
+  async function loadIdentity() {
+    identity = { status: "loading" };
+    try {
+      const data = await api.getIdentity();
+      identity = { status: "loaded", data };
+      nameDraft = data.name;
+      emailDraft = data.email;
+    } catch (e) {
+      identity = { status: "error", message: errorMessage(e) };
+    }
+  }
+
+  async function saveIdentity() {
+    if (identity.status !== "loaded") return;
+    const name = nameDraft.trim();
+    const email = emailDraft.trim();
+    if (name === identity.data.name && email === identity.data.email) return;
+    identitySaving = true;
+    identityError = null;
+    try {
+      await api.setIdentity({ name, email });
+      identity = { status: "loaded", data: { name, email } };
+    } catch (e) {
+      identityError = errorMessage(e);
+    } finally {
+      identitySaving = false;
+    }
+  }
+
   async function handleQuit() {
     quitting = true;
     quitError = null;
@@ -51,6 +93,7 @@
   }
 
   loadAutostart();
+  loadIdentity();
 </script>
 
 <div class="status-bar">
@@ -92,6 +135,42 @@
     </p>
   {:else if autostartError}
     <p class="banner error">Couldn't change that setting: {autostartError}</p>
+  {/if}
+
+  {#if showIdentityNudge}
+    <p class="hint nudge">Versions you create aren't labelled with your name yet.</p>
+  {/if}
+
+  <div class="identity">
+    <label>
+      Your name
+      <input
+        type="text"
+        bind:value={nameDraft}
+        disabled={identity.status !== "loaded"}
+        onblur={saveIdentity}
+      />
+    </label>
+    <label>
+      Email
+      <input
+        type="email"
+        bind:value={emailDraft}
+        disabled={identity.status !== "loaded"}
+        onblur={saveIdentity}
+      />
+    </label>
+  </div>
+  <p class="hint">Only used to label versions you create. Stays on this device.</p>
+  {#if identity.status === "error"}
+    <p class="banner error">
+      Couldn't load your name and email: {identity.message}
+      <button class="retry" onclick={loadIdentity}>Try again</button>
+    </p>
+  {:else if identityError}
+    <p class="banner error">Couldn't save that: {identityError}</p>
+  {:else if identitySaving}
+    <p class="hint">Saving…</p>
   {/if}
 </div>
 
@@ -159,6 +238,27 @@
     color: var(--muted);
     font-size: 0.75rem;
     line-height: 1.4;
+  }
+
+  .hint.nudge {
+    margin-left: 0;
+  }
+
+  .identity {
+    display: flex;
+    gap: 0.8rem;
+  }
+
+  .identity label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+
+  .identity input {
+    font-size: 0.85rem;
   }
 
   .banner.error {

@@ -10,6 +10,7 @@ use tauri_plugin_autostart::ManagerExt;
 
 mod db;
 mod engine;
+mod identity;
 mod watcher;
 
 /// Dropped verbatim into every newly tracked folder. Plain language, no
@@ -190,6 +191,22 @@ fn get_timeline(file_id: i64, state: State<'_, AppState>) -> Result<Vec<db::Revi
     db::get_timeline(&conn, file_id).map_err(to_err)
 }
 
+/// Where this device's identity.json lives - beside tracer.db, never in it
+/// (see `identity` module docs).
+fn identity_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app.path().app_data_dir().map_err(to_err)?.join("identity.json"))
+}
+
+#[tauri::command]
+fn get_identity(app: AppHandle) -> Result<identity::Identity, String> {
+    Ok(identity::read(&identity_path(&app)?))
+}
+
+#[tauri::command]
+fn set_identity(name: String, email: String, app: AppHandle) -> Result<(), String> {
+    identity::write(&identity_path(&app)?, &name, &email)
+}
+
 #[tauri::command]
 fn set_milestone(
     revision_id: i64,
@@ -298,6 +315,7 @@ pub fn run() {
                 active_paths,
                 Arc::clone(&shared_conn),
                 objects_root.clone(),
+                data_dir.join("identity.json"),
                 move |file_id, revision_id| {
                     let _ = emitter.emit(
                         "revision-created",
@@ -358,7 +376,9 @@ pub fn run() {
             save_copy,
             quit_app,
             is_autostart_enabled,
-            set_autostart
+            set_autostart,
+            get_identity,
+            set_identity
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

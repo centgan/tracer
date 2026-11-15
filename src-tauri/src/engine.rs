@@ -652,12 +652,17 @@ mod tests {
         let snap = snapshot(&src, objects_root.path()).unwrap();
         let revision_id = db::insert_revision(
             &mut conn,
-            file_id,
-            1000,
-            snap.byte_size,
-            &snap.manifest_hash,
-            &snap.parts,
-            &snap.objects,
+            db::NewRevision {
+                file_id,
+                timestamp: 1000,
+                byte_size: snap.byte_size,
+                manifest_hash: &snap.manifest_hash,
+                parts: &snap.parts,
+                objects: &snap.objects,
+                author_name: None,
+                author_email: None,
+                parent_id: None,
+            },
         )
         .expect("inserting a revision whose objects are all already on disk");
 

@@ -44,6 +44,101 @@
   function toggle(group: { id: number }) {
     override[group.id] = !isOpen(group);
   }
+
+  // The selected version, single-select across the whole pane - same model
+  // as the Folders and Files panes. Kept local since no other screen needs
+  // to know which version is selected.
+  let selectedId = $state<number | null>(null);
+  let selectedRevision = $derived(
+    revisions && revisions.status === "loaded"
+      ? (revisions.data.find((r) => r.id === selectedId) ?? null)
+      : null,
+  );
+
+  let naming = $state(false);
+  let labelDraft = $state("");
+  let namingBusy = $state(false);
+  let namingError = $state<string | null>(null);
+
+  let copyBusy = $state(false);
+  let copyPath = $state<string | null>(null);
+  let copyError = $state<string | null>(null);
+
+  // Switching files should drop the old selection - it's not even in the new
+  // list. Tracked by id, not the `selectedFile` object itself, so a file-list
+  // refresh (new objects, same id) doesn't blow away the user's selection.
+  let lastFileId = $state<number | null>(null);
+  $effect(() => {
+    const id = selectedFile?.id ?? null;
+    if (id !== lastFileId) {
+      lastFileId = id;
+      selectedId = null;
+      naming = false;
+      namingError = null;
+      copyPath = null;
+      copyError = null;
+    }
+  });
+
+  function selectRevision(id: number) {
+    selectedId = id;
+    naming = false;
+    namingError = null;
+    copyPath = null;
+    copyError = null;
+  }
+
+  function startNaming() {
+    if (!selectedRevision) return;
+    labelDraft = selectedRevision.milestone ?? "";
+    namingError = null;
+    naming = true;
+  }
+
+  function cancelNaming() {
+    naming = false;
+    namingError = null;
+  }
+
+  // Svelte's a11y lint rightly rejects the `autofocus` attribute (it can
+  // yank focus from under an unsuspecting user); focusing from an action
+  // triggered by our own click handler doesn't have that problem.
+  function focusOnMount(node: HTMLElement) {
+    node.focus();
+  }
+
+  async function confirmNaming() {
+    if (!selectedRevision) return;
+    const label = labelDraft.trim();
+    if (!label) {
+      namingError = "Give this version a name first.";
+      return;
+    }
+    namingBusy = true;
+    namingError = null;
+    try {
+      await onSetMilestone(selectedRevision.id, label);
+      naming = false;
+    } catch (e) {
+      namingError = e instanceof Error ? e.message : "Couldn't save that name.";
+    } finally {
+      namingBusy = false;
+    }
+  }
+
+  async function handleSaveCopy() {
+    if (!selectedRevision) return;
+    copyBusy = true;
+    copyError = null;
+    copyPath = null;
+    try {
+      copyPath = await onSaveCopy(selectedRevision.id);
+    } catch (e) {
+      copyError = e instanceof Error ? e.message : "Couldn't save a copy.";
+    } finally {
+      copyBusy = false;
+    }
+  }
 </script>
 
 <section class="pane">
@@ -66,9 +161,9 @@
           {#if group.revisions.length === 1}
             <TimelineRow
               revision={group.revisions[0]}
+              selected={group.revisions[0].id === selectedId}
               justArrived={group.revisions[0].id === justArrivedId}
-              {onSetMilestone}
-              {onSaveCopy}
+              onSelect={selectRevision}
             />
           {:else}
             <li class="session">
@@ -77,23 +172,25 @@
                 aria-expanded={isOpen(group)}
                 onclick={() => toggle(group)}
               >
-                <span class="chevron" class:open={isOpen(group)}>▸</span>
+                <span class="session-label">
+                  <span class="chevron" class:open={isOpen(group)} aria-hidden="true">▸</span>
+                  {group.revisions.length} saves
+                </span>
                 <span class="session-span"
                   >{formatSessionSpan(
                     group.revisions[group.revisions.length - 1].timestamp,
                     group.revisions[0].timestamp,
                   )}</span
                 >
-                <span class="session-count">{group.revisions.length} saves</span>
               </button>
               {#if isOpen(group)}
                 <ul class="rows nested">
                   {#each group.revisions as revision (revision.id)}
                     <TimelineRow
                       {revision}
+                      selected={revision.id === selectedId}
                       justArrived={revision.id === justArrivedId}
-                      {onSetMilestone}
-                      {onSaveCopy}
+                      onSelect={selectRevision}
                     />
                   {/each}
                 </ul>
@@ -104,6 +201,33 @@
       </ul>
     {/if}
   </div>
+
+  <div class="actions">
+    {#if naming}
+      <input
+        use:focusOnMount
+        bind:value={labelDraft}
+        placeholder="e.g. sent to supervisor"
+        disabled={namingBusy}
+        onkeydown={(e) => {
+          if (e.key === "Enter") confirmNaming();
+          if (e.key === "Escape") cancelNaming();
+        }}
+      />
+      <button onclick={confirmNaming} disabled={namingBusy}>Save</button>
+      <button class="plain" onclick={cancelNaming} disabled={namingBusy}>Cancel</button>
+    {:else}
+      <button onclick={startNaming} disabled={!selectedRevision}>Name this version</button>
+      <button onclick={handleSaveCopy} disabled={!selectedRevision || copyBusy}>
+        {copyBusy ? "Saving…" : "Save a copy"}
+      </button>
+    {/if}
+  </div>
+  {#if namingError}<p class="error-text pad">{namingError}</p>{/if}
+  {#if copyPath}
+    <p class="hint pad">Saved a read-only copy to {copyPath}. Your live file wasn't touched.</p>
+  {/if}
+  {#if copyError}<p class="error-text pad">{copyError}</p>{/if}
 </section>
 
 <style>
@@ -131,12 +255,24 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
+    /* Four metadata columns plus a label have a real minimum width. Below
+       it, scroll horizontally instead of mangling every column down to
+       unreadable slivers. */
+    overflow-x: auto;
   }
 
   .rows {
     list-style: none;
     margin: 0;
     padding: 0;
+  }
+
+  /* Hairlines between rows so 200 versions still read as discrete items
+     instead of running together. Mixed from --ink so the contrast direction
+     is always right: dark lines on the light well, light lines on the dark
+     one, with neither reading as heavy as a real border. */
+  .rows > li:not(:last-child) {
+    border-bottom: 1px solid color-mix(in srgb, var(--ink) 12%, transparent);
   }
 
   .session {
@@ -146,9 +282,10 @@
 
   .session-toggle {
     width: 100%;
-    display: flex;
+    display: grid;
+    grid-template-columns: var(--timeline-grid);
     align-items: center;
-    gap: 8px;
+    column-gap: 12px;
     min-height: 24px;
     padding: 3px 8px;
     background: none;
@@ -164,6 +301,16 @@
 
   .session-toggle:hover {
     background: var(--face-hover);
+  }
+
+  .session-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .chevron {
@@ -182,20 +329,31 @@
   }
 
   .session-span {
-    flex: 1;
+    grid-column: 2 / span 2;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .session-count {
-    flex: none;
-    opacity: 0.72;
+    font-family: var(--data);
     font-weight: normal;
+    opacity: 0.75;
   }
 
   .rows.nested {
     padding-left: 16px;
+  }
+
+  .actions {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-top: 2px;
+    border-top: 1px solid var(--edge);
+  }
+
+  .actions input {
+    flex: 1;
+    min-width: 0;
   }
 </style>

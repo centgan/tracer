@@ -13,6 +13,22 @@
     selectedFileId: number | null;
     onSelect: (id: number) => void;
   } = $props();
+
+  // Office's own colours for its three formats - already in the user's head,
+  // so reusing them beats inventing a new scheme. Anything else gets a
+  // neutral glyph: a colour with no meaning behind it is just decoration.
+  const FILE_KIND_COLOR: Record<string, string> = {
+    doc: "var(--doc)",
+    docx: "var(--doc)",
+    xls: "var(--sheet)",
+    xlsx: "var(--sheet)",
+    ppt: "var(--deck)",
+    pptx: "var(--deck)",
+  };
+
+  function fileGlyphColor(extension: string): string {
+    return FILE_KIND_COLOR[extension.toLowerCase()] ?? "var(--face-dark)";
+  }
 </script>
 
 <section class="pane">
@@ -38,7 +54,18 @@
               class:selected={file.id === selectedFileId}
               onclick={() => onSelect(file.id)}
             >
-              <span class="name">{file.relativePath}</span>
+              <span class="file-info">
+                <svg class="file-glyph" viewBox="0 0 12 14" aria-hidden="true" focusable="false">
+                  <path
+                    d="M1 1h6l4 4v8a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V1z"
+                    fill={fileGlyphColor(file.extension)}
+                    stroke="var(--edge)"
+                    stroke-width="1"
+                  />
+                  <path d="M7 1v4h4" fill="none" stroke="var(--edge)" stroke-width="1" />
+                </svg>
+                <span class="name">{file.relativePath}</span>
+              </span>
               <span class="when">
                 {file.lastChanged === null ? "no versions" : formatRelativeTime(file.lastChanged)}
               </span>
@@ -99,6 +126,19 @@
 
   .row:hover:not(.selected) {
     background: var(--face-hover);
+  }
+
+  .file-info {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .file-glyph {
+    flex: none;
+    width: 12px;
+    height: 14px;
   }
 
   .name {

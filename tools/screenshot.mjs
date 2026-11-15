@@ -107,6 +107,15 @@ const run = async () => {
     await shoot(page, `${label}dark`, { dark: true });
 
     if (label === "") {
+      // Select a named version in the timeline so the selection highlight
+      // and the bottom action strip's enabled state are both visible.
+      await page
+        .getByRole("button", { name: /sent to supervisor/ })
+        .click()
+        .catch(() => {});
+      await page.waitForTimeout(200);
+      await shoot(page, "timeline-selected");
+
       await shoot(page, "narrow", { width: 760, height: 700 });
       await page.emulateMedia({ colorScheme: "light" });
       await page.getByRole("button", { name: /settings/i }).click();

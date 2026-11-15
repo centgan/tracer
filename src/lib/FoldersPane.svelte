@@ -66,7 +66,17 @@
               onclick={() => onSelect(vault.id)}
               title={watchTitle(vault)}
             >
-              <span class="name">{folderName(vault.rootPath)}</span>
+              <span class="folder-info">
+                <svg class="folder-glyph" viewBox="0 0 16 12" aria-hidden="true" focusable="false">
+                  <path
+                    d="M1 2h5l1.5 1.5H15v7a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V2z"
+                    fill="var(--folder)"
+                    stroke="var(--edge)"
+                    stroke-width="1"
+                  />
+                </svg>
+                <span class="name">{folderName(vault.rootPath)}</span>
+              </span>
               <span class="state" class:unwatched={!vault.hasTracerFolder}>
                 <span class="dot" aria-hidden="true">●</span>
                 {vault.hasTracerFolder ? "Watching" : "Not watched"}
@@ -135,6 +145,19 @@
 
   .row:hover:not(.selected) {
     background: var(--face-hover);
+  }
+
+  .folder-info {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .folder-glyph {
+    flex: none;
+    width: 16px;
+    height: 12px;
   }
 
   .name {

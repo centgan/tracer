@@ -207,27 +207,17 @@
   .title-bar {
     display: flex;
     align-items: center;
-    justify-content: center;
     height: 28px;
     flex: none;
-    /* The one flourish in the app. --face against --chrome was a 12-point
-       luminance step and read as a flat bar; stripes need the full light-to-
-       shade range to look chiselled rather than smudged. */
-    background: repeating-linear-gradient(
-      to bottom,
-      var(--light) 0px,
-      var(--light) 1px,
-      var(--face-dark) 1px,
-      var(--face-dark) 2px
-    );
+    padding: 0 10px;
+    /* The one loud element in the app, straight out of Windows 95: a navy-
+       to-blue gradient behind white bold text. Everything below stays quiet. */
+    background: linear-gradient(to right, var(--title-a), var(--title-b));
     border-bottom: 1px solid var(--edge);
   }
 
   .title-bar-text {
-    /* Sits in a gap punched out of the stripes, the way a Platinum window
-       title does - hence the chrome fill and the breathing room either side. */
-    background: var(--chrome);
-    padding: 2px 14px;
+    color: #fff;
     font-size: 13px;
     font-weight: bold;
     letter-spacing: 0.02em;

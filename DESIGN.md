@@ -34,8 +34,20 @@ Platinum greys, warmed slightly so it doesn't read as dead pixels.
 | `--edge` | `#2b2925` | Hard outer border, near-black but warm |
 | `--ink` | `#17150f` | Text |
 | `--select` | `#000080` | Selection fill, white text on it |
-| `--live` | `#007a3d` | Watching. The only green in the app |
-| `--warn` | `#8a5a00` | Not watched. The only amber |
+| `--live` | `#007a3d` | Watching |
+| `--warn` | `#8a5a00` | Not watched |
+| `--title-a` | `#000080` | Title bar gradient, left |
+| `--title-b` | `#1084d0` | Title bar gradient, right |
+| `--folder` | `#e0a33c` | Folder glyphs. Manila, like every folder icon of the era |
+| `--doc` | `#2b579a` | Word files |
+| `--sheet` | `#217346` | Excel files |
+| `--deck` | `#b7472a` | PowerPoint files |
+
+Grey alone was too austere - the era was grey chrome with saturated colour
+*inside* it: a blue title bar, manila folders, and application colours on
+documents. Every colour above still encodes something (state, or which app
+owns a file); none is decoration. Office's own three colours are used for the
+three file types because that association is already in the user's head.
 
 Dark mode has no historical basis, so it is an honest reinterpretation: chrome
 `#39352f`, well `#211f1b`, bevels inverted (light becomes `#56514a`, shade
@@ -101,15 +113,52 @@ whole design.
    a 1px bevel reads as a hairline and the whole interface looks flat, which is
    why there are inner `--face-light` / `--face-dark` steps between the bright
    edge and the shadow.
-2. **Spend the boldness on the title bar.** The pinstriped bar is the one
-   memorable flourish. Everything below it stays quiet.
+2. **Spend the boldness on the title bar.** A navy-to-blue gradient with white
+   bold text, straight out of Windows 95. It is the one loud element;
+   everything below stays quiet.
 3. **Selection is a navy block with white text**, not a pale tint. Era-correct,
    and far clearer about what is selected.
-4. **One green, one amber, one navy.** Color only ever means watching, not
-   watched, or selected. Nothing is colored to look nice.
-5. **No rounded corners, no shadows, no gradients** except the title bar's
-   pinstripes. Authentic, and it keeps the eye on the content.
+4. **Colour always means something.** Green is watching, amber is not watched,
+   navy is selected, manila is a folder, and the three Office colours mean
+   Word, Excel and PowerPoint. Nothing is coloured to look nice. If a new
+   colour is needed, it needs a meaning first.
+5. **No rounded corners and no shadows.** The only gradient is the title bar.
 6. **Rows are flush and dense**, like a Finder list. A timeline of 200 versions
    has to stay scannable.
 7. Modern floor, unannounced: visible keyboard focus, `prefers-reduced-motion`
    respected, hit targets at least 24px, contrast that passes.
+
+## The timeline
+
+The timeline is the screen people came for, and it was the most confusing one:
+every version took two lines, and the second line was sometimes a name and
+sometimes an action link, so you could not see where one version ended and the
+next began.
+
+**One version is one row.** Named or not, it occupies a single line:
+
+```
+ ★ sent to supervisor            today 12:50    3.6 MB   Eric Feng
+   today 12:57                                  3.6 MB   Eric Feng
+ ▸ 4 saves                 today 12:41 – 12:48
+ ★ first full draft              today 07:05    3.6 MB   Eric Feng
+```
+
+A version's **name is its label** when it has one; its time is the label when
+it doesn't. Time, size and author line up in columns down the list so the eye
+can scan them.
+
+**Actions belong to the selection, not to every row.** Clicking a version
+selects it - a navy block, exactly like the Folders and Files panes - and the
+actions live in one strip at the bottom of the pane, acting on whatever is
+selected:
+
+```
+├──────────────────────────────────────────────┤
+│ [ Name this version ]  [ Save a copy ]       │
+└──────────────────────────────────────────────┘
+```
+
+Disabled when nothing is selected. This is how a Finder window works, it
+removes a button and a link from every row, and it makes the three panes behave
+the same way instead of each having its own interaction model.

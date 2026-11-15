@@ -20,6 +20,21 @@
      cue, not a fourth color. */
   --flash: rgb(0 122 61 / 16%);
 
+  --title-a: #000080;
+  --title-b: #1084d0;
+  --folder: #e0a33c;
+  --doc: #2b579a;
+  --sheet: #217346;
+  --deck: #b7472a;
+
+  /* Shared column grid for the timeline: label, time, size, author, and a
+     trailing "new" flag. Time/size are sized for their worst-case text
+     ("6 days ago 12:50 PM", "999.9 MB"); label and author split what's left,
+     weighted toward the label since version names run longer than author
+     names. Declared once so TimelineRow and the session-toggle row never
+     drift apart. */
+  --timeline-grid: minmax(6em, 2fr) 10.5em 4.5em minmax(4em, 1fr) 2.5em;
+
   --ui: Geneva, "MS Sans Serif", Verdana, sans-serif;
   --data: Monaco, "Courier New", monospace;
 
@@ -44,6 +59,16 @@
     --live: #2fbf6e;
     --warn: #caa23a;
     --flash: rgb(47 191 110 / 20%);
+
+    /* Same hues, lifted in lightness/saturation so they still read against
+       dark chrome instead of sinking into it. */
+    --title-a: #0c1f6e;
+    --title-b: #2fa0e0;
+    --folder: #e8b457;
+    --doc: #4d8fd1;
+    --sheet: #3ba86a;
+    --deck: #d1724d;
+
     color-scheme: dark;
   }
 }
@@ -156,4 +181,21 @@ input[type="email"] {
   outline: 2px solid var(--select);
   outline-offset: 1px;
 }
-</content>
+
+/* A narrow window can't carry five columns: at 760px the time column was
+   truncating to "today 01:..." and the time is the label for an unnamed
+   version. Drop the least load-bearing columns instead of squeezing all of
+   them - author first, then size. The label and time always survive. */
+@media (max-width: 1000px) {
+  :root {
+    --timeline-grid: minmax(6em, 2fr) 10.5em 4.5em 0 2.5em;
+  }
+}
+
+@media (max-width: 850px) {
+  :root {
+    /* An unnamed version carries its time in the label, so the label needs
+       room for a full timestamp before the (then empty) time column gets any. */
+    --timeline-grid: minmax(9.5em, 3fr) 9em 0 0 2.5em;
+  }
+}

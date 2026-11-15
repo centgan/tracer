@@ -161,7 +161,11 @@
       />
     </label>
   </div>
-  <p class="hint">Only used to label versions you create. Stays on this device.</p>
+  <p class="hint">
+    Labels the versions you create, so anyone sharing the folder can see who made
+    what — and who to ask about it. This setting is saved on your computer; it
+    isn't shared, but the name on your versions is.
+  </p>
   {#if identity.status === "error"}
     <p class="banner error">
       Couldn't load your name and email: {identity.message}

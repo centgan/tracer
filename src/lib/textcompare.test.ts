@@ -13,7 +13,9 @@ function removed(text: string): TextRow {
 describe("collapseUnchanged", () => {
   it("leaves a short run of unchanged lines alone", () => {
     const rows = [same("a"), same("b"), removed("c"), same("d")];
-    expect(collapseUnchanged(rows)).toEqual(rows.map((row) => ({ kind: "row", row })));
+    expect(collapseUnchanged(rows)).toEqual(
+      rows.map((row, i) => ({ kind: "row", row, line: i + 1 })),
+    );
   });
 
   it("folds a long run of unchanged lines, keeping context on each side", () => {
@@ -32,18 +34,20 @@ describe("collapseUnchanged", () => {
 
     const result = collapseUnchanged(rows);
 
-    expect(result[0]).toEqual({ kind: "row", row: rows[0] });
-    expect(result[1]).toEqual({ kind: "row", row: same("1") });
-    expect(result[2]).toEqual({ kind: "row", row: same("2") });
+    expect(result[0]).toEqual({ kind: "row", row: rows[0], line: 1 });
+    expect(result[1]).toEqual({ kind: "row", row: same("1"), line: 2 });
+    expect(result[2]).toEqual({ kind: "row", row: same("2"), line: 3 });
     expect(result[3]).toEqual({ kind: "collapsed", count: 4 });
-    expect(result[4]).toEqual({ kind: "row", row: same("7") });
-    expect(result[5]).toEqual({ kind: "row", row: same("8") });
-    expect(result[6]).toEqual({ kind: "row", row: rows[9] });
+    expect(result[4]).toEqual({ kind: "row", row: same("7"), line: 8 });
+    expect(result[5]).toEqual({ kind: "row", row: same("8"), line: 9 });
+    expect(result[6]).toEqual({ kind: "row", row: rows[9], line: 10 });
     expect(result).toHaveLength(7);
   });
 
   it("never collapses when nothing is unchanged", () => {
     const rows = [removed("a"), removed("b")];
-    expect(collapseUnchanged(rows)).toEqual(rows.map((row) => ({ kind: "row", row })));
+    expect(collapseUnchanged(rows)).toEqual(
+      rows.map((row, i) => ({ kind: "row", row, line: i + 1 })),
+    );
   });
 });

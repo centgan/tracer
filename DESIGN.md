@@ -162,3 +162,47 @@ selected:
 Disabled when nothing is selected. This is how a Finder window works, it
 removes a button and a link from every row, and it makes the three panes behave
 the same way instead of each having its own interaction model.
+
+## Comparing text
+
+The side-by-side comparison is the one screen that stops being a list, so it
+gets the whole window. Squeezed into a third of the width it was two narrow
+columns of grey text and you had to remember which side was which.
+
+**It takes over the window.** Folders, files and the timeline go away while
+you read a comparison; the title bar stays so the app still looks like itself.
+Escape, or Done, returns you exactly where you were.
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ Tracer ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ │
+├──────────────────────────────────────────────────────────────────┤
+│ Slide 4 — Defense deck.pptx      2 changes   ‹ prev  next ›  Done │
+├─────────────────────────────────┬────────────────────────────────┤
+│ − first full draft              │ + today 03:55 PM               │  ← sticky
+│   Sep 2 · Eric Feng             │   today · Eric Feng            │
+├─────────────────────────────────┴────────────────────────────────┤
+│  1   Thank you for your continued partnership this quarter.      │
+│  2   Revenue grew by 12%  │  2   Revenue grew by 18%             │
+│      over the prior…      │      over the prior…                 │
+│  3 − The pilot program…   │  3 + We are also launching…          │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+**Telling the sides apart** is the job of the column headers, and they never
+scroll away. Each carries its version's name or time, its author, and a `−` or
+`+` so the roles are stated rather than inferred. The headers are tinted with
+the same removed/added colours used in the body, so the association is made
+once at the top and holds all the way down.
+
+**A line gutter** down each side numbers the paragraphs. It gives the eye
+something to track across the gap, and it turns "the third paragraph" into
+something two people can say to each other.
+
+**Moving between changes.** Unchanged text is context, not content, so there
+are `prev`/`next` controls that jump to the next differing line, and a count of
+how many there are. A long document should never need scrolling to find what
+moved.
+
+Colour still never works alone: the markers, the gutter and the side a line
+sits on each say the same thing.

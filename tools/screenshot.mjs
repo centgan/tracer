@@ -129,47 +129,65 @@ const COMPARE_RESULT = {
 };
 
 // compare_part_text's fixture, for clicking "Slide 4" in the changed-parts
-// list: a realistic mix of an untouched paragraph, one with a single word
-// changed (word-level spans isolate just that word), an added paragraph and
-// a removed one.
+// list. Deliberately long: enough paragraphs that the collapsed-run and
+// prev/next controls mean something, changes scattered through it rather
+// than bunched at the top, and one paragraph long enough to wrap across
+// several lines so the gutter's wrap behaviour is visible.
+const same = (text) => ({ status: "same", left: text, right: text, leftSpans: [], rightSpans: [] });
+const changed = (left, right, word, replacement) => ({
+  status: "changed",
+  left,
+  right,
+  leftSpans: [
+    { text: left.slice(0, left.indexOf(word)), changed: false },
+    { text: word, changed: true },
+    { text: left.slice(left.indexOf(word) + word.length), changed: false },
+  ],
+  rightSpans: [
+    { text: right.slice(0, right.indexOf(replacement)), changed: false },
+    { text: replacement, changed: true },
+    { text: right.slice(right.indexOf(replacement) + replacement.length), changed: false },
+  ],
+});
+const added = (text) => ({ status: "added", left: null, right: text, leftSpans: [], rightSpans: [] });
+const removed = (text) => ({ status: "removed", left: text, right: null, leftSpans: [], rightSpans: [] });
+
 const TEXT_COMPARISON = {
   rows: [
-    {
-      status: "same",
-      left: "Thank you for your continued partnership this quarter.",
-      right: "Thank you for your continued partnership this quarter.",
-      leftSpans: [],
-      rightSpans: [],
-    },
-    {
-      status: "changed",
-      left: "Revenue grew by 12% over the prior period.",
-      right: "Revenue grew by 18% over the prior period.",
-      leftSpans: [
-        { text: "Revenue grew by ", changed: false },
-        { text: "12%", changed: true },
-        { text: " over the prior period.", changed: false },
-      ],
-      rightSpans: [
-        { text: "Revenue grew by ", changed: false },
-        { text: "18%", changed: true },
-        { text: " over the prior period.", changed: false },
-      ],
-    },
-    {
-      status: "added",
-      left: null,
-      right: "We are also launching a new enterprise tier next month.",
-      leftSpans: [],
-      rightSpans: [],
-    },
-    {
-      status: "removed",
-      left: "The pilot program with three customers has concluded.",
-      right: null,
-      leftSpans: [],
-      rightSpans: [],
-    },
+    same("Thank you for your continued partnership this quarter."),
+    same(
+      "Our engineering team shipped four major releases during the quarter, closing out a sustained backlog of customer-requested improvements across the reporting dashboard, the mobile client, and the underlying data pipeline that feeds every downstream integration our partners depend on.",
+    ),
+    same("Overall growth remained steady across every region we track."),
+    changed(
+      "Revenue grew by 12% over the prior period.",
+      "Revenue grew by 18% over the prior period.",
+      "12%",
+      "18%",
+    ),
+    same("Customer churn held flat at just under two percent."),
+    same("Support tickets per seat continued trending downward."),
+    same("The onboarding team closed out its backlog in record time."),
+    same("Marketing spend tracked within two percent of budget."),
+    same("Every region met its quarterly hiring plan."),
+    same("The platform's uptime held above our internal target."),
+    same("Legal finished its review of the updated vendor contracts."),
+    same("Finance closed the books three days ahead of schedule."),
+    removed("The pilot program with three customers has concluded."),
+    same("Looking ahead, three initiatives define the next quarter."),
+    same("First, the enterprise tier moves out of private beta."),
+    added("We are also launching a new enterprise tier next month."),
+    same("Second, the mobile client gets offline support."),
+    changed(
+      "The team expects a two week rollout window for this change.",
+      "The team expects a one week rollout window for this change.",
+      "two",
+      "one",
+    ),
+    same("Third, the reporting dashboard adds a cohort view."),
+    same("None of this changes the roadmap we shared in January."),
+    same("We remain on track for the targets set at the offsite."),
+    same("Thank you again for the trust you've placed in the team."),
   ],
   hasText: true,
 };
@@ -351,22 +369,37 @@ const run = async () => {
       await shoot(page, "compare-dark", { dark: true });
 
       // The text-compare flow: click a changed slide's name to open the
-      // side-by-side view.
+      // full-screen side-by-side view. It takes over the whole window, so
+      // these shots are full width rather than scoped to the timeline pane.
       await timelinePane
         .getByRole("button", { name: "Slide 4" })
         .click()
         .catch(() => {});
-      await page.waitForTimeout(200);
+      await page.waitForTimeout(250);
       await shoot(page, "compare-text");
       await shoot(page, "compare-text-dark", { dark: true });
-      await page.emulateMedia({ colorScheme: "light" });
-      await shoot(page, "compare-text-narrow", { width: 700, height: 760 });
 
-      await timelinePane
-        .getByRole("button", { name: "Back to changed parts" })
-        .click()
-        .catch(() => {});
+      // prev/next should jump straight to a changed line and scroll it into
+      // view. A short viewport forces that to matter - the whole comparison
+      // fits in a tall window with nothing to scroll.
+      await page.emulateMedia({ colorScheme: "light" });
+      await page.setViewportSize({ width: 1100, height: 420 });
+      await page.waitForTimeout(100);
+      await page.getByRole("button", { name: "Next change" }).click();
       await page.waitForTimeout(150);
+      await page.getByRole("button", { name: "Next change" }).click();
+      await page.waitForTimeout(400);
+      await page.screenshot({ path: `${OUT}/compare-text-navigated.png` });
+      console.log(`${OUT}/compare-text-navigated.png`);
+
+      await shoot(page, "compare-text-narrow", { width: 700, height: 900 });
+
+      // Done should hand back exactly the screen left behind: same file,
+      // same selection, the changed-parts list still open underneath.
+      await page.setViewportSize({ width: 1100, height: 760 });
+      await page.getByRole("button", { name: "Done" }).click();
+      await page.waitForTimeout(150);
+      await shoot(page, "compare-after-done");
 
       await page.getByRole("button", { name: /settings/i }).click();
       await page.waitForTimeout(300);

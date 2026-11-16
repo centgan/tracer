@@ -226,6 +226,7 @@ is, so when the font changes the comparison says so in words.
 A paragraph whose words are identical but whose formatting changed is a change,
 and it was previously invisible. It's shown on both sides, same as a reworded
 line - older on the left, newer on the right - marked `~` rather than `−`/`+`
-since the words themselves didn't move, with the exact word that was restyled
-underlined on both sides and the difference spelled out underneath the newer
-one.
+since the words themselves didn't move. The restyled word itself gets the same
+mark any changed word gets: strikethrough on the left, underline on the right,
+not a mark of its own, with the difference spelled out underneath the newer
+side.

@@ -866,13 +866,28 @@ fn first_restyled_run<'a>(old: &'a Paragraph, new: &'a Paragraph) -> Option<(&'a
 /// `old`. Feeds `intersect_runs_and_spans` the same way a word-level text
 /// diff does for a "changed" row, so a restyled word gets marked precisely
 /// rather than leaving the reader to take a paragraph-wide note on faith.
-fn format_diff_marks(old: &Paragraph, new: &Paragraph) -> Vec<TextSpan> {
+fn format_diff_marks_new(old: &Paragraph, new: &Paragraph) -> Vec<TextSpan> {
     let Some(pairs) = align_runs(old, new) else { return Vec::new() };
     let new_chars = new.runs.iter().flat_map(|r| r.text.chars());
 
     pairs
         .iter()
         .zip(new_chars)
+        .map(|(&(oi, ni), c)| TextSpan::plain(c.to_string(), runs_differ(&old.runs[oi], &new.runs[ni])))
+        .collect()
+}
+
+/// Mirror of `format_diff_marks_new` for the older side: same per-character
+/// `changed` flag, but the text and formatting it carries are `old`'s own -
+/// a restyled row shows the same word marked on both sides, each rendered in
+/// its own formatting rather than one side borrowing the other's.
+fn format_diff_marks_old(old: &Paragraph, new: &Paragraph) -> Vec<TextSpan> {
+    let Some(pairs) = align_runs(old, new) else { return Vec::new() };
+    let old_chars = old.runs.iter().flat_map(|r| r.text.chars());
+
+    pairs
+        .iter()
+        .zip(old_chars)
         .map(|(&(oi, ni), c)| TextSpan::plain(c.to_string(), runs_differ(&old.runs[oi], &new.runs[ni])))
         .collect()
 }
@@ -955,16 +970,19 @@ pub fn diff_text(older: &[Paragraph], newer: &[Paragraph]) -> TextComparison {
         // Only worth marking spans when there's a restyle to point at -
         // otherwise this is a plain "same" row the frontend never renders
         // through the spans path.
-        let right_spans = if note.is_empty() {
-            Vec::new()
+        let (left_spans, right_spans) = if note.is_empty() {
+            (Vec::new(), Vec::new())
         } else {
-            intersect_runs_and_spans(&new.runs, &format_diff_marks(old, new))
+            (
+                intersect_runs_and_spans(&old.runs, &format_diff_marks_old(old, new)),
+                intersect_runs_and_spans(&new.runs, &format_diff_marks_new(old, new)),
+            )
         };
         TextRow {
             status: if note.is_empty() { "same" } else { "restyled" }.to_string(),
             left: Some(text.clone()),
             right: Some(text),
-            left_spans: Vec::new(),
+            left_spans,
             right_spans,
             left_runs: old.runs.clone(),
             right_runs: new.runs.clone(),
@@ -1880,9 +1898,13 @@ mod tests {
 
         // The note names a single font, but the paragraph has two runs - a
         // reader needs to see *which* word that refers to, not take a
-        // sentence-level caption on faith.
+        // sentence-level caption on faith. Both sides mark the same word.
         assert_eq!(
             restyled.right_spans.iter().map(|s| (s.text.as_str(), s.changed)).collect::<Vec<_>>(),
+            vec![("Provide a short ", false), ("summary", true)],
+        );
+        assert_eq!(
+            restyled.left_spans.iter().map(|s| (s.text.as_str(), s.changed)).collect::<Vec<_>>(),
             vec![("Provide a short ", false), ("summary", true)],
         );
     }

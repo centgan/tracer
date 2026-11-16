@@ -155,12 +155,16 @@
             >{/each}
         {/snippet}
 
-        {#snippet formattedRestyledSpans(pieces: TextSpan[])}
-          {#each pieces as piece}
-            <span class:restyled-word={piece.changed} style={pieceStyle(piece, baseline, null)}
-              >{piece.text}</span
-            >
-          {/each}
+        {#snippet formattedRestyledSpans(spans: TextSpan[], runs: Run[])}
+          {#if spans.length > 0}
+            {#each spans as piece}
+              <span class:restyled-word={piece.changed} style={pieceStyle(piece, baseline, null)}
+                >{piece.text}</span
+              >
+            {/each}
+          {:else}
+            {@render formattedRuns(runs, null)}
+          {/if}
         {/snippet}
 
         {#snippet formattedSpans(pieces: TextSpan[], side: "left" | "right")}
@@ -188,26 +192,28 @@
               <span class="line-text">{@render formattedRuns(item.row.leftRuns, null)}</span>
             </div>
           {:else if item.row.status === "restyled"}
-            <!-- Identical text, different formatting - shown once rather than
-                 duplicated across both columns (DESIGN.md's "Showing
-                 formatting": "It appears once, not duplicated across the
-                 columns, marked ~, with the difference spelled out beside it."). -->
-            <div class="full-row restyled-row" use:trackLine={item.line}>
+            <!-- Identical text, different formatting - shown on both sides the
+                 same way a reworded line is, older on the left and newer on
+                 the right, so a restyle reads in the same vocabulary as any
+                 other change instead of a one-off presentation of its own.
+                 Marked ~ rather than −/+, since the words themselves didn't
+                 change, and captioned with what did underneath the newer
+                 side. -->
+            <div class="text-cell left-cell removed" use:trackLine={item.line}>
               <span class="gutter" aria-hidden="true">{item.line}</span>
               <span class="line-text">
                 <span class="marker" aria-hidden="true">~&nbsp;</span>
-                <!-- The newer side's formatting - the paragraph as the
-                     document looks now - with the restyled word itself
-                     highlighted, so the caption below only has to confirm
-                     what changed rather than say where. -->
-                {#if item.row.rightSpans.length > 0}
-                  {@render formattedRestyledSpans(item.row.rightSpans)}
-                {:else}
-                  {@render formattedRuns(item.row.rightRuns, null)}
-                {/if}
+                {@render formattedRestyledSpans(item.row.leftSpans, item.row.leftRuns)}
+              </span>
+            </div>
+            <div class="text-cell right-cell added">
+              <span class="gutter" aria-hidden="true">{item.line}</span>
+              <span class="line-text">
+                <span class="marker" aria-hidden="true">~&nbsp;</span>
+                {@render formattedRestyledSpans(item.row.rightSpans, item.row.rightRuns)}
               </span>
               {#if item.row.formatNote}
-                <div class="format-note">({item.row.formatNote})</div>
+                <div class="format-note">{item.row.formatNote}</div>
               {/if}
             </div>
           {:else}
@@ -530,29 +536,22 @@
     background: var(--diff-add-bg);
   }
 
-  /* No colour of its own - distinguishes a reformatted-but-reworded-nothing
-     paragraph from an unchanged one without reaching for the added/removed
-     greens and reds, which mean something else (DESIGN.md principle 4). */
-  .restyled-row .marker {
-    font-weight: bold;
-    opacity: 0.8;
-  }
-
-  /* Marks exactly the word a restyle actually touched - a tint, not an
-     underline, so it never collides with a document underline pieceStyle()
-     renders on the same word. No colour of its own, same reasoning as the
-     row's own marker above. */
+  /* Marks exactly the word a restyle actually touched - an underline, not a
+     background, so it never fights the cell's own red/green tint. Matters
+     most for a font change, which (DESIGN.md's "Showing formatting") never
+     renders as an actual font swap, so without this mark the two sides of a
+     restyled line would look visually identical. */
   .restyled-word {
-    background: color-mix(in srgb, currentColor 16%, transparent);
-    border-radius: 2px;
+    text-decoration: underline;
+    text-decoration-thickness: 2px;
+    text-underline-offset: 3px;
   }
 
-  /* Its own line below the paragraph, not appended after it - inline, it
-     read as a stray continuation of the document's own sentence. Indented
-     to roughly where the text above it starts (2em gutter + 6px gap, same
-     as every other row's grid). */
+  /* Its own grid row below the paragraph, lined up under the text rather
+     than the gutter (column 2 of the cell's own 2em/1fr grid) - appended
+     inline, it read as a stray continuation of the document's own sentence. */
   .format-note {
-    margin-left: calc(2em + 6px);
+    grid-column: 2;
     font-size: 11px;
     font-style: italic;
     opacity: 0.68;

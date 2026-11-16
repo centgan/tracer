@@ -224,5 +224,8 @@ silent substitution would show a difference that isn't there, or hide one that
 is, so when the font changes the comparison says so in words.
 
 A paragraph whose words are identical but whose formatting changed is a change,
-and it was previously invisible. It appears once, not duplicated across the
-columns, marked `~`, with the difference spelled out beside it.
+and it was previously invisible. It's shown on both sides, same as a reworded
+line - older on the left, newer on the right - marked `~` rather than `−`/`+`
+since the words themselves didn't move, with the exact word that was restyled
+underlined on both sides and the difference spelled out underneath the newer
+one.

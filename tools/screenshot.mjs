@@ -227,15 +227,18 @@ const restyled = (text, leftRun, rightRun, formatNote) => ({
 // that word in rightSpans instead of leaving the whole line unmarked.
 const restyledWord = (before, word, after, overrides, formatNote) => {
   const text = `${before}${word}${after}`;
-  const piece = (t, changed) => ({ ...fmtRun(t, changed ? overrides : {}), changed });
+  const spans = (useOverrides) => {
+    const piece = (t, changed) => ({ ...fmtRun(t, changed && useOverrides ? overrides : {}), changed });
+    return [piece(before, false), piece(word, true), piece(after, false)].filter(
+      (s) => s.text.length > 0,
+    );
+  };
   return {
     status: "restyled",
     left: text,
     right: text,
-    leftSpans: [],
-    rightSpans: [piece(before, false), piece(word, true), piece(after, false)].filter(
-      (s) => s.text.length > 0,
-    ),
+    leftSpans: spans(false),
+    rightSpans: spans(true),
     leftRuns: [fmtRun(before), fmtRun(word), fmtRun(after)].filter((r) => r.text.length > 0),
     rightRuns: [fmtRun(before), fmtRun(word, overrides), fmtRun(after)].filter((r) => r.text.length > 0),
     formatNote,

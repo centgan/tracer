@@ -81,6 +81,55 @@ describe("collapseUnchanged", () => {
       rows.map((row, i) => ({ kind: "row", row, line: i + 1 })),
     );
   });
+
+  // A long run of unchanged lines that reaches the end of the document has
+  // nothing after it to give context for - showing the document's literal
+  // last two lines looked like an unexplained leftover, not context for
+  // anything.
+  it("drops trailing context when the unchanged run reaches the end of the document", () => {
+    const rows = [
+      removed("before"),
+      same("1"),
+      same("2"),
+      same("3"),
+      same("4"),
+      same("5"),
+      same("6"),
+      same("7"),
+      same("8"),
+    ];
+
+    const result = collapseUnchanged(rows);
+
+    expect(result[0]).toEqual({ kind: "row", row: rows[0], line: 1 });
+    expect(result[1]).toEqual({ kind: "row", row: same("1"), line: 2 });
+    expect(result[2]).toEqual({ kind: "row", row: same("2"), line: 3 });
+    expect(result[3]).toEqual({ kind: "collapsed", count: 6 });
+    expect(result).toHaveLength(4);
+  });
+
+  // Symmetrically, a run starting at row 1 has nothing before it either.
+  it("drops leading context when the unchanged run starts at the beginning of the document", () => {
+    const rows = [
+      same("1"),
+      same("2"),
+      same("3"),
+      same("4"),
+      same("5"),
+      same("6"),
+      same("7"),
+      same("8"),
+      removed("after"),
+    ];
+
+    const result = collapseUnchanged(rows);
+
+    expect(result[0]).toEqual({ kind: "collapsed", count: 6 });
+    expect(result[1]).toEqual({ kind: "row", row: same("7"), line: 7 });
+    expect(result[2]).toEqual({ kind: "row", row: same("8"), line: 8 });
+    expect(result[3]).toEqual({ kind: "row", row: rows[8], line: 9 });
+    expect(result).toHaveLength(4);
+  });
 });
 
 describe("baselineSizePt", () => {

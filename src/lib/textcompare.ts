@@ -18,7 +18,7 @@ export type DisplayRow =
 const CONTEXT = 2;
 // A run shorter than this just isn't worth folding - collapsing it would
 // hide as much as it shows.
-const MIN_RUN_TO_COLLAPSE = CONTEXT * 2 + 3;
+const MIN_EXTRA_TO_COLLAPSE = 3;
 
 export function collapseUnchanged(rows: TextRow[]): DisplayRow[] {
   const out: DisplayRow[] = [];
@@ -35,12 +35,20 @@ export function collapseUnchanged(rows: TextRow[]): DisplayRow[] {
     while (j < rows.length && rows[j].status === "same") j += 1;
     const runLength = j - i;
 
-    if (runLength <= MIN_RUN_TO_COLLAPSE) {
+    // Context only earns its place next to a visible neighbour it's leading
+    // the reader into. A run starting at row 1 has nothing before it to
+    // orient to, and a run ending at the last row has nothing after - the
+    // trailing lines of a document, with no further change to explain, were
+    // showing up looking like an unexplained leftover rather than context.
+    const lead = i === 0 ? 0 : CONTEXT;
+    const trail = j === rows.length ? 0 : CONTEXT;
+
+    if (runLength <= lead + trail + MIN_EXTRA_TO_COLLAPSE) {
       for (let k = i; k < j; k += 1) out.push({ kind: "row", row: rows[k], line: k + 1 });
     } else {
-      for (let k = i; k < i + CONTEXT; k += 1) out.push({ kind: "row", row: rows[k], line: k + 1 });
-      out.push({ kind: "collapsed", count: runLength - CONTEXT * 2 });
-      for (let k = j - CONTEXT; k < j; k += 1) out.push({ kind: "row", row: rows[k], line: k + 1 });
+      for (let k = i; k < i + lead; k += 1) out.push({ kind: "row", row: rows[k], line: k + 1 });
+      out.push({ kind: "collapsed", count: runLength - lead - trail });
+      for (let k = j - trail; k < j; k += 1) out.push({ kind: "row", row: rows[k], line: k + 1 });
     }
 
     i = j;

@@ -1,6 +1,6 @@
 <script lang="ts">
-  import type { Loadable, Revision, TextComparison } from "./types";
-  import { collapseUnchanged } from "./textcompare";
+  import type { Loadable, Revision, Run, TextComparison, TextSpan } from "./types";
+  import { baselineSizePt, collapseUnchanged, pieceStyle } from "./textcompare";
   import { formatDateOnly, versionLabel } from "./format";
 
   // This is the one screen that takes over the whole window (see
@@ -41,6 +41,11 @@
   let displayRows = $derived(
     comparison.status === "loaded" ? collapseUnchanged(comparison.data.rows) : [],
   );
+
+  // The comparison's own most common size, so a heading renders larger than
+  // body text in proportion rather than at its literal point size (DESIGN.md:
+  // "Sizes are rendered in proportion, not in absolute points").
+  let baseline = $derived(comparison.status === "loaded" ? baselineSizePt(comparison.data.rows) : 12);
 
   // Every line a reader would actually want to jump to - the ones that
   // changed. Unchanged text is context, so it never gets a stop; without
@@ -145,6 +150,25 @@
             </span>
           </div>
         </div>
+        {#snippet formattedRuns(pieces: Run[], markedAs: "removed" | "added" | null)}
+          {#each pieces as piece}<span style={pieceStyle(piece, baseline, markedAs)}>{piece.text}</span
+            >{/each}
+        {/snippet}
+
+        {#snippet formattedSpans(pieces: TextSpan[], side: "left" | "right")}
+          {#each pieces as piece}
+            <span
+              class:diff-word-removed={piece.changed && side === "left"}
+              class:diff-word-added={piece.changed && side === "right"}
+              style={pieceStyle(
+                piece,
+                baseline,
+                piece.changed ? (side === "left" ? "removed" : "added") : null,
+              )}>{piece.text}</span
+            >
+          {/each}
+        {/snippet}
+
         {#each displayRows as item}
           {#if item.kind === "collapsed"}
             <div class="collapsed-marker">
@@ -153,7 +177,23 @@
           {:else if item.row.status === "same"}
             <div class="full-row same-row" use:trackLine={item.line}>
               <span class="gutter" aria-hidden="true">{item.line}</span>
-              <span class="line-text">{item.row.left}</span>
+              <span class="line-text">{@render formattedRuns(item.row.leftRuns, null)}</span>
+            </div>
+          {:else if item.row.status === "restyled"}
+            <!-- Identical text, different formatting - shown once rather than
+                 duplicated across both columns (DESIGN.md's "Showing
+                 formatting": "It appears once, not duplicated across the
+                 columns, marked ~, with the difference spelled out beside it."). -->
+            <div class="full-row restyled-row" use:trackLine={item.line}>
+              <span class="gutter" aria-hidden="true">{item.line}</span>
+              <span class="line-text">
+                <span class="marker" aria-hidden="true">~&nbsp;</span>
+                <!-- The newer side's formatting - the paragraph as the
+                     document looks now - with the note saying what it used
+                     to be. -->
+                {@render formattedRuns(item.row.rightRuns, null)}
+                <span class="format-note">{item.row.formatNote}</span>
+              </span>
             </div>
           {:else}
             <div
@@ -168,12 +208,10 @@
                   {#if item.row.status === "removed" || item.row.status === "changed"}
                     <span class="marker" aria-hidden="true">−&nbsp;</span>
                   {/if}
-                  {#if item.row.leftSpans.length > 0}
-                    {#each item.row.leftSpans as span}<span class:diff-word-removed={span.changed}
-                        >{span.text}</span
-                      >{/each}
+                  {#if item.row.status === "changed"}
+                    {@render formattedSpans(item.row.leftSpans, "left")}
                   {:else}
-                    {item.row.left}
+                    {@render formattedRuns(item.row.leftRuns, "removed")}
                   {/if}
                 </span>
               {/if}
@@ -189,12 +227,10 @@
                   {#if item.row.status === "added" || item.row.status === "changed"}
                     <span class="marker" aria-hidden="true">+&nbsp;</span>
                   {/if}
-                  {#if item.row.rightSpans.length > 0}
-                    {#each item.row.rightSpans as span}<span class:diff-word-added={span.changed}
-                        >{span.text}</span
-                      >{/each}
+                  {#if item.row.status === "changed"}
+                    {@render formattedSpans(item.row.rightSpans, "right")}
                   {:else}
-                    {item.row.right}
+                    {@render formattedRuns(item.row.rightRuns, "added")}
                   {/if}
                 </span>
               {/if}
@@ -420,12 +456,12 @@
     background: var(--diff-remove-bg);
   }
 
-  /* A paragraph that is gone entirely gets struck through, in the removed
-     colour, on the older side only. A tint alone left it looking like a line
-     that merely moved; this says deleted. */
+  /* Colour and strikethrough for a wholly-gone paragraph come from
+     pieceStyle() per run now, not from this rule - a document colour on the
+     text must win over the interface's removed-red, or a red word in
+     someone's document would be mistaken for our own deletion marking (see
+     DESIGN.md's "Showing formatting"). */
   .text-cell.removed .line-text {
-    color: var(--diff-remove);
-    text-decoration: line-through;
     text-decoration-thickness: 1px;
   }
 
@@ -436,10 +472,6 @@
 
   .text-cell.added {
     background: var(--diff-add-bg);
-  }
-
-  .text-cell.added .line-text {
-    color: var(--diff-add);
   }
 
   /* A changed line shows on both sides, so stacked it would otherwise be two
@@ -453,7 +485,8 @@
   }
 
   /* The marker is the colour-blind-safe signal a whole line was added or
-     removed, independent of the background tint. */
+     removed, independent of the background tint, and of any document colour
+     the line's own text carries. */
   .text-cell.removed .marker {
     color: var(--diff-remove);
     font-weight: bold;
@@ -464,20 +497,37 @@
     font-weight: bold;
   }
 
-  /* Word-level marks inside a "changed" row. Colour plus a second, non-colour
-     channel (strikethrough on the old word, underline on the new one) so the
-     exact words that differ are legible without relying on hue. */
+  /* Word-level marks inside a "changed" row: a tinted background is the one
+     thing every marked word gets, regardless of document colour. Foreground
+     colour and strikethrough/underline come from pieceStyle() per word - a
+     document colour wins there over the interface's remove/add colour, so a
+     red word in someone's document can't be mistaken for a deletion. */
+  .diff-word-removed,
+  .diff-word-added {
+    border-radius: 2px;
+  }
+
   .diff-word-removed {
     background: var(--diff-remove-bg);
-    color: var(--diff-remove);
-    text-decoration: line-through;
   }
 
   .diff-word-added {
     background: var(--diff-add-bg);
-    color: var(--diff-add);
-    text-decoration: underline;
-    text-decoration-thickness: 2px;
+  }
+
+  /* No colour of its own - distinguishes a reformatted-but-reworded-nothing
+     paragraph from an unchanged one without reaching for the added/removed
+     greens and reds, which mean something else (DESIGN.md principle 4). */
+  .restyled-row .marker {
+    font-weight: bold;
+    opacity: 0.8;
+  }
+
+  .format-note {
+    margin-left: 0.6em;
+    font-size: 11px;
+    font-style: italic;
+    opacity: 0.68;
   }
 
   /* Below this, two columns squeeze into unreadable slivers - stack instead,

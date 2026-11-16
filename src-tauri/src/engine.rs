@@ -335,12 +335,16 @@ pub fn load_object(objects_root: &Path, hash: &str) -> Result<Vec<u8>> {
 // scanning for run tags is the standard approach for OOXML text.
 // ---------------------------------------------------------------------------
 
-/// Finds every top-level `<tag ...>...</tag>` (or self-closing `<tag .../>`,
-/// whose content is empty) in `xml`, returning each occurrence's raw
-/// (undecoded) inner text in document order.
+/// Finds every top-level `<tag ...>` occurrence (self-closing or not) in
+/// `xml`, in document order, returning each one's attribute text (between
+/// the tag name and the closing `>`/`/>`) paired with its inner text
+/// (`None` for a self-closing tag, which has none).
 ///
-/// Tag-boundary aware, so asking for `"a:p"` never matches `"a:pPr"`.
-fn tag_spans<'a>(xml: &'a str, tag: &str) -> Vec<&'a str> {
+/// Tag-boundary aware, so asking for `"a:p"` never matches `"a:pPr"`. The one
+/// scanner behind both `tag_spans` (inner text, for paragraphs and runs) and
+/// `tag_attrs` (attribute text, for properties like `<w:sz w:val="24"/>`
+/// whose value lives on the tag itself, not in its content).
+fn tag_occurrences<'a>(xml: &'a str, tag: &str) -> Vec<(&'a str, Option<&'a str>)> {
     let open_prefix = format!("<{tag}");
     let close = format!("</{tag}>");
     let mut out = Vec::new();
@@ -361,11 +365,13 @@ fn tag_spans<'a>(xml: &'a str, tag: &str) -> Vec<&'a str> {
         let Some(gt_rel) = after.find('>') else {
             break;
         };
-        let is_self_closing = after[..gt_rel].trim_end().ends_with('/');
+        let trimmed = after[..gt_rel].trim_end();
+        let is_self_closing = trimmed.ends_with('/');
+        let attrs = if is_self_closing { &trimmed[..trimmed.len() - 1] } else { trimmed };
         let content_start = start + open_prefix.len() + gt_rel + 1;
 
         if is_self_closing {
-            out.push("");
+            out.push((attrs.trim(), None));
             offset = content_start;
             continue;
         }
@@ -374,11 +380,35 @@ fn tag_spans<'a>(xml: &'a str, tag: &str) -> Vec<&'a str> {
             break;
         };
         let content_end = content_start + close_rel;
-        out.push(&xml[content_start..content_end]);
+        out.push((attrs.trim(), Some(&xml[content_start..content_end])));
         offset = content_end + close.len();
     }
 
     out
+}
+
+/// Every top-level `<tag ...>...</tag>` (or self-closing `<tag .../>`,
+/// whose content is empty) in `xml`, as raw (undecoded) inner text.
+fn tag_spans<'a>(xml: &'a str, tag: &str) -> Vec<&'a str> {
+    tag_occurrences(xml, tag)
+        .into_iter()
+        .map(|(_, content)| content.unwrap_or(""))
+        .collect()
+}
+
+/// Every top-level `<tag ...>` occurrence's attribute text, for properties
+/// that live as attributes on the tag itself (`<w:sz w:val="24"/>`,
+/// `<a:rPr b="1" sz="1800">`) rather than in its content.
+fn tag_attrs<'a>(xml: &'a str, tag: &str) -> Vec<&'a str> {
+    tag_occurrences(xml, tag).into_iter().map(|(attrs, _)| attrs).collect()
+}
+
+/// One `attr="value"` lookup within a tag's attribute text, decoded.
+fn attr_value(attrs: &str, attr: &str) -> Option<String> {
+    let needle = format!("{attr}=\"");
+    let start = attrs.find(needle.as_str())? + needle.len();
+    let end = attrs[start..].find('"')?;
+    Some(decode_entities(&attrs[start..start + end]))
 }
 
 /// Decodes the five predefined XML entities. `&amp;` is decoded last so a
@@ -395,38 +425,214 @@ fn decode_entities(s: &str) -> String {
         .replace("&amp;", "&")
 }
 
-/// One line per `para_tag` element, its `run_tag` runs concatenated - the
-/// shape both PowerPoint (`a:p`/`a:t`) and Word (`w:p`/`w:t`) use.
-fn paragraph_text(xml: &str, para_tag: &str, run_tag: &str) -> Vec<String> {
-    tag_spans(xml, para_tag)
+/// One run of text sharing one set of formatting, as the file itself stores
+/// it. A missing property (`None`/`false`) means inherited/default - never
+/// invented.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Run {
+    pub text: String,
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub size_pt: Option<f32>,
+    pub font: Option<String>,
+    /// "RRGGBB", as the file stores it.
+    pub color: Option<String>,
+}
+
+impl Run {
+    fn plain(text: String) -> Run {
+        Run {
+            text,
+            bold: false,
+            italic: false,
+            underline: false,
+            size_pt: None,
+            font: None,
+            color: None,
+        }
+    }
+}
+
+/// One paragraph, as the runs that make it up.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Paragraph {
+    pub runs: Vec<Run>,
+}
+
+impl Paragraph {
+    /// Concatenated run text - what the existing line-level diffing works
+    /// off, same as the flat `String` lines this type replaced.
+    pub fn text(&self) -> String {
+        self.runs.iter().map(|r| r.text.as_str()).collect()
+    }
+}
+
+/// A run's formatting with every field still optional, so "this level didn't
+/// say" (`None`, fall through to an outer default) stays distinguishable
+/// from "this level said off" (`Some(false)`) until the final merge.
+#[derive(Clone, Debug, Default)]
+struct RunProps {
+    bold: Option<bool>,
+    italic: Option<bool>,
+    underline: Option<bool>,
+    size_pt: Option<f32>,
+    font: Option<String>,
+    color: Option<String>,
+}
+
+impl RunProps {
+    /// `self` (a run's own properties) wins; `default` (the paragraph's)
+    /// fills whatever `self` left unset.
+    fn merged_over(&self, default: &RunProps) -> RunProps {
+        RunProps {
+            bold: self.bold.or(default.bold),
+            italic: self.italic.or(default.italic),
+            underline: self.underline.or(default.underline),
+            size_pt: self.size_pt.or(default.size_pt),
+            font: self.font.clone().or_else(|| default.font.clone()),
+            color: self.color.clone().or_else(|| default.color.clone()),
+        }
+    }
+
+    fn into_run(self, text: String) -> Run {
+        Run {
+            text,
+            bold: self.bold.unwrap_or(false),
+            italic: self.italic.unwrap_or(false),
+            underline: self.underline.unwrap_or(false),
+            size_pt: self.size_pt,
+            font: self.font,
+            color: self.color,
+        }
+    }
+}
+
+/// A boolean toggle element (`<w:b/>`, `<w:b w:val="0"/>`): present and on
+/// unless its value says otherwise.
+fn flag_is_on(attrs: &str) -> bool {
+    !matches!(attr_value(attrs, "w:val").as_deref(), Some("0") | Some("false") | Some("off"))
+}
+
+/// Word's run properties: toggle elements (`<w:b/>`, `<w:i/>`, `<w:u .../>`)
+/// plus `<w:sz>` (half-points), `<w:rFonts ascii="...">` and `<w:color>`.
+fn parse_word_run_props(rpr: &str) -> RunProps {
+    let bold = tag_attrs(rpr, "w:b").first().map(|a| flag_is_on(a));
+    let italic = tag_attrs(rpr, "w:i").first().map(|a| flag_is_on(a));
+    // <w:u w:val="none"/> explicitly turns underlining off; any other value
+    // ("single", "double", ...) turns it on.
+    let underline = tag_attrs(rpr, "w:u")
+        .first()
+        .map(|a| attr_value(a, "w:val").as_deref() != Some("none"));
+    let size_pt = tag_attrs(rpr, "w:sz")
+        .first()
+        .and_then(|a| attr_value(a, "w:val"))
+        .and_then(|v| v.parse::<f32>().ok())
+        .map(|half_points| half_points / 2.0);
+    let font = tag_attrs(rpr, "w:rFonts").first().and_then(|a| attr_value(a, "w:ascii"));
+    // "auto" means "let the renderer decide", which is the same as no colour.
+    let color = tag_attrs(rpr, "w:color")
+        .first()
+        .and_then(|a| attr_value(a, "w:val"))
+        .filter(|v| v != "auto");
+
+    RunProps { bold, italic, underline, size_pt, font, color }
+}
+
+/// PowerPoint's run properties: `b`/`i`/`u`/`sz` live as attributes on
+/// `<a:rPr>` itself (hundredths of a point for size); font and colour are
+/// children (`<a:latin typeface="...">`, `<a:solidFill><a:srgbClr val="...">`).
+fn parse_ppt_run_props(attrs: &str, content: Option<&str>) -> RunProps {
+    let bold = attr_value(attrs, "b").map(|v| v == "1");
+    let italic = attr_value(attrs, "i").map(|v| v == "1");
+    let underline = attr_value(attrs, "u").map(|v| v != "none");
+    let size_pt = attr_value(attrs, "sz")
+        .and_then(|v| v.parse::<f32>().ok())
+        .map(|hundredths| hundredths / 100.0);
+
+    let (font, color) = match content {
+        None => (None, None),
+        Some(content) => {
+            let font = tag_attrs(content, "a:latin").first().and_then(|a| attr_value(a, "typeface"));
+            let color = tag_spans(content, "a:solidFill")
+                .first()
+                .and_then(|fill| tag_attrs(fill, "a:srgbClr").first().and_then(|a| attr_value(a, "val")));
+            (font, color)
+        }
+    };
+
+    RunProps { bold, italic, underline, size_pt, font, color }
+}
+
+/// Word paragraphs (`<w:p>`/`<w:r>`/`<w:t>`), with each run's own `<w:rPr>`
+/// falling back to the paragraph's default in `<w:pPr>/<w:rPr>` for whatever
+/// it doesn't specify itself.
+fn word_paragraphs(xml: &str) -> Vec<Paragraph> {
+    tag_spans(xml, "w:p")
         .into_iter()
-        .map(|paragraph| {
-            tag_spans(paragraph, run_tag)
+        .map(|p_content| {
+            let default_props = tag_spans(p_content, "w:pPr")
+                .first()
+                .and_then(|ppr| tag_spans(ppr, "w:rPr").first().map(|rpr| parse_word_run_props(rpr)))
+                .unwrap_or_default();
+
+            let runs = tag_spans(p_content, "w:r")
                 .into_iter()
-                .map(decode_entities)
-                .collect::<String>()
+                .map(|r_content| {
+                    let own = tag_spans(r_content, "w:rPr")
+                        .first()
+                        .map(|rpr| parse_word_run_props(rpr))
+                        .unwrap_or_default();
+                    let text: String =
+                        tag_spans(r_content, "w:t").into_iter().map(decode_entities).collect();
+                    own.merged_over(&default_props).into_run(text)
+                })
+                .collect();
+
+            Paragraph { runs }
         })
         .collect()
 }
 
-/// One line per `tag` element, with no grouping - Excel's shared strings have
-/// no paragraph structure to group by.
-fn flat_tag_text(xml: &str, tag: &str) -> Vec<String> {
-    tag_spans(xml, tag).into_iter().map(decode_entities).collect()
+/// PowerPoint paragraphs (`<a:p>`/`<a:r>`/`<a:t>`). No paragraph-level
+/// default to fall back to - PowerPoint's own default lives in the slide
+/// layout/master, out of scope here.
+fn ppt_paragraphs(xml: &str) -> Vec<Paragraph> {
+    tag_spans(xml, "a:p")
+        .into_iter()
+        .map(|p_content| {
+            let runs = tag_spans(p_content, "a:r")
+                .into_iter()
+                .map(|r_content| {
+                    let props = match tag_occurrences(r_content, "a:rPr").into_iter().next() {
+                        Some((attrs, content)) => parse_ppt_run_props(attrs, content),
+                        None => RunProps::default(),
+                    };
+                    let text: String =
+                        tag_spans(r_content, "a:t").into_iter().map(decode_entities).collect();
+                    props.into_run(text)
+                })
+                .collect();
+
+            Paragraph { runs }
+        })
+        .collect()
 }
 
-/// Pulls a part's text out in document order, one entry per paragraph.
+/// Pulls a part's text and formatting out in document order, one entry per
+/// paragraph.
 ///
 /// Returns an empty `Vec` for a part with no recognised text runs (including
 /// one whose bytes aren't valid UTF-8) rather than guessing - the UI says
 /// text comparison isn't available instead of showing nonsense.
-pub fn extract_text(entry_name: &str, bytes: &[u8]) -> Vec<String> {
+pub fn extract_text(entry_name: &str, bytes: &[u8]) -> Vec<Paragraph> {
     let Ok(xml) = std::str::from_utf8(bytes) else {
         return Vec::new();
     };
 
     if entry_name.starts_with("ppt/slides/slide") || entry_name.starts_with("ppt/notesSlides/") {
-        return paragraph_text(xml, "a:p", "a:t");
+        return ppt_paragraphs(xml);
     }
 
     let is_word_text_part = entry_name == "word/document.xml"
@@ -435,30 +641,60 @@ pub fn extract_text(entry_name: &str, bytes: &[u8]) -> Vec<String> {
         || entry_name.starts_with("word/header")
         || entry_name.starts_with("word/footer");
     if is_word_text_part {
-        return paragraph_text(xml, "w:p", "w:t");
+        return word_paragraphs(xml);
     }
 
     if entry_name == "xl/sharedStrings.xml" {
-        return flat_tag_text(xml, "t");
+        // Excel's shared strings have no paragraph structure or run-level
+        // formatting worth showing - each cell's text is its own unformatted
+        // paragraph.
+        return tag_spans(xml, "t")
+            .into_iter()
+            .map(decode_entities)
+            .map(|text| Paragraph { runs: vec![Run::plain(text)] })
+            .collect();
     }
 
     Vec::new()
 }
 
-/// One word-level piece of a changed line, for marking exactly which words
-/// differ rather than highlighting the whole line.
+/// One word-level piece of a changed line, carrying both whether it differs
+/// and the formatting of the run it sits in - the frontend needs both at
+/// once to mark a changed word inside (say) a bold run without losing the
+/// bold.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TextSpan {
     pub text: String,
     pub changed: bool,
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub size_pt: Option<f32>,
+    pub font: Option<String>,
+    pub color: Option<String>,
+}
+
+impl TextSpan {
+    fn plain(text: String, changed: bool) -> TextSpan {
+        TextSpan {
+            text,
+            changed,
+            bold: false,
+            italic: false,
+            underline: false,
+            size_pt: None,
+            font: None,
+            color: None,
+        }
+    }
 }
 
 /// One row of a side-by-side text comparison.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TextRow {
-    /// "same" | "added" | "removed" | "changed"
+    /// "same" | "added" | "removed" | "changed" | "restyled"
     pub status: String,
     pub left: Option<String>,
     pub right: Option<String>,
@@ -466,6 +702,15 @@ pub struct TextRow {
     /// can be marked. Empty for every other status.
     pub left_spans: Vec<TextSpan>,
     pub right_spans: Vec<TextSpan>,
+    /// Document-order runs for this row's text, on every row, so the
+    /// frontend can render any line - not just a "changed" one - the way the
+    /// document actually looks. Empty on the side that has no text (the
+    /// gone side of a "removed" row, the absent side of an "added" row).
+    pub left_runs: Vec<Run>,
+    pub right_runs: Vec<Run>,
+    /// Plain-language summary of what changed about the formatting, e.g.
+    /// "11pt → 12pt · Calibri → Georgia · now bold". Empty when nothing did.
+    pub format_note: String,
 }
 
 /// A side-by-side comparison of a part's extracted text between two versions.
@@ -479,7 +724,8 @@ pub struct TextComparison {
 }
 
 /// Word-level diff of one changed line, split into the spans that render
-/// either side of it.
+/// either side of it. Formatting-free - `intersect_runs_and_spans` layers
+/// formatting on afterward.
 fn word_spans(old: &str, new: &str) -> (Vec<TextSpan>, Vec<TextSpan>) {
     let mut left = Vec::new();
     let mut right = Vec::new();
@@ -488,15 +734,141 @@ fn word_spans(old: &str, new: &str) -> (Vec<TextSpan>, Vec<TextSpan>) {
         let text = change.value().to_string();
         match change.tag() {
             similar::ChangeTag::Equal => {
-                left.push(TextSpan { text: text.clone(), changed: false });
-                right.push(TextSpan { text, changed: false });
+                left.push(TextSpan::plain(text.clone(), false));
+                right.push(TextSpan::plain(text, false));
             }
-            similar::ChangeTag::Delete => left.push(TextSpan { text, changed: true }),
-            similar::ChangeTag::Insert => right.push(TextSpan { text, changed: true }),
+            similar::ChangeTag::Delete => left.push(TextSpan::plain(text, true)),
+            similar::ChangeTag::Insert => right.push(TextSpan::plain(text, true)),
         }
     }
 
     (left, right)
+}
+
+/// `runs` and `spans` both partition the same string - `runs` by formatting
+/// (from the file), `spans` by whether a word changed (from `word_spans`).
+/// Walked character by character and re-grouped wherever either partition
+/// draws a boundary, so a changed word inside a bold run comes back as a
+/// piece that is both bold and marked, rather than the diff mark forcing the
+/// formatting to lose a boundary or vice versa.
+///
+/// `runs` and `spans` must describe the same text; if they don't (lengths
+/// differ), formatting is kept and change-marking is dropped rather than
+/// panicking on mismatched input.
+fn intersect_runs_and_spans(runs: &[Run], spans: &[TextSpan]) -> Vec<TextSpan> {
+    let run_chars: Vec<(char, usize)> =
+        runs.iter().enumerate().flat_map(|(i, r)| r.text.chars().map(move |c| (c, i))).collect();
+    let span_chars: Vec<(char, usize)> =
+        spans.iter().enumerate().flat_map(|(i, s)| s.text.chars().map(move |c| (c, i))).collect();
+
+    if run_chars.len() != span_chars.len() {
+        return runs
+            .iter()
+            .map(|r| TextSpan {
+                text: r.text.clone(),
+                changed: false,
+                bold: r.bold,
+                italic: r.italic,
+                underline: r.underline,
+                size_pt: r.size_pt,
+                font: r.font.clone(),
+                color: r.color.clone(),
+            })
+            .collect();
+    }
+
+    let mut out: Vec<TextSpan> = Vec::new();
+    for ((c, run_i), (_, span_i)) in run_chars.into_iter().zip(span_chars) {
+        let run = &runs[run_i];
+        let changed = spans[span_i].changed;
+
+        let continues_last = out.last().is_some_and(|last| {
+            last.changed == changed
+                && last.bold == run.bold
+                && last.italic == run.italic
+                && last.underline == run.underline
+                && last.size_pt == run.size_pt
+                && last.font == run.font
+                && last.color == run.color
+        });
+
+        if continues_last {
+            out.last_mut().expect("just checked Some above").text.push(c);
+        } else {
+            out.push(TextSpan {
+                text: c.to_string(),
+                changed,
+                bold: run.bold,
+                italic: run.italic,
+                underline: run.underline,
+                size_pt: run.size_pt,
+                font: run.font.clone(),
+                color: run.color.clone(),
+            });
+        }
+    }
+    out
+}
+
+/// Renders a point size without a trailing `.0`.
+fn format_pt(pt: f32) -> String {
+    if pt.fract() == 0.0 {
+        format!("{}", pt as i32)
+    } else {
+        format!("{pt}")
+    }
+}
+
+/// Plain-language summary of a formatting-only change between two paragraphs
+/// whose text is identical, comparing only what a reader actually notices -
+/// font, size, bold, italic, underline, colour. Uses each paragraph's first
+/// run as its representative formatting: Office applies one style per
+/// paragraph in the overwhelming common case, and a mixed-run paragraph
+/// still gets the most visible change described rather than every run's.
+/// Empty when nothing a reader would notice changed.
+fn format_note(old: &Paragraph, new: &Paragraph) -> String {
+    let (Some(old_run), Some(new_run)) = (old.runs.first(), new.runs.first()) else {
+        return String::new();
+    };
+
+    let mut parts = Vec::new();
+
+    if let (Some(o), Some(n)) = (old_run.size_pt, new_run.size_pt) {
+        if o != n {
+            parts.push(format!("{}pt → {}pt", format_pt(o), format_pt(n)));
+        }
+    }
+
+    match (&old_run.font, &new_run.font) {
+        (Some(o), Some(n)) if o != n => parts.push(format!("{o} → {n}")),
+        // "default → Georgia" reads like a font called default. The file
+        // simply names no font when the paragraph inherits one, and the
+        // reader doesn't know or care which it inherited.
+        (None, Some(n)) => parts.push(format!("font now {n}")),
+        (Some(o), None) => parts.push(format!("no longer {o}")),
+        _ => {}
+    }
+
+    if old_run.bold != new_run.bold {
+        parts.push(if new_run.bold { "now bold" } else { "no longer bold" }.to_string());
+    }
+    if old_run.italic != new_run.italic {
+        parts.push(if new_run.italic { "now italic" } else { "no longer italic" }.to_string());
+    }
+    if old_run.underline != new_run.underline {
+        parts.push(
+            if new_run.underline { "now underlined" } else { "no longer underlined" }.to_string(),
+        );
+    }
+
+    if old_run.color != new_run.color {
+        match &new_run.color {
+            Some(n) => parts.push(format!("now #{n}")),
+            None => parts.push("colour removed".to_string()),
+        }
+    }
+
+    parts.join(" · ")
 }
 
 /// Aligns `older`'s and `newer`'s paragraphs and marks what changed.
@@ -507,53 +879,74 @@ fn word_spans(old: &str, new: &str) -> (Vec<TextSpan>, Vec<TextSpan>) {
 /// one-word edit marks that word rather than the whole paragraph. When a
 /// replaced block's side lengths differ, the first `min(old_len, new_len)`
 /// lines are paired as "changed" and the rest fall back to "removed"/"added".
-pub fn diff_text(older: &[String], newer: &[String]) -> TextComparison {
+///
+/// A pair whose text matches exactly but whose formatting doesn't is
+/// "restyled", not "same" - a paragraph that was entirely reformatted and
+/// never reworded was previously invisible to this comparison.
+pub fn diff_text(older: &[Paragraph], newer: &[Paragraph]) -> TextComparison {
     if older.is_empty() && newer.is_empty() {
         return TextComparison { rows: Vec::new(), has_text: false };
     }
 
-    let older_refs: Vec<&str> = older.iter().map(String::as_str).collect();
-    let newer_refs: Vec<&str> = newer.iter().map(String::as_str).collect();
+    let older_text: Vec<String> = older.iter().map(Paragraph::text).collect();
+    let newer_text: Vec<String> = newer.iter().map(Paragraph::text).collect();
+    let older_refs: Vec<&str> = older_text.iter().map(String::as_str).collect();
+    let newer_refs: Vec<&str> = newer_text.iter().map(String::as_str).collect();
     let diff = similar::TextDiff::from_slices(&older_refs, &newer_refs);
 
-    let same_row = |text: String| TextRow {
-        status: "same".to_string(),
-        left: Some(text.clone()),
-        right: Some(text),
-        left_spans: Vec::new(),
-        right_spans: Vec::new(),
+    let paired_row = |old: &Paragraph, new: &Paragraph| -> TextRow {
+        let text = old.text();
+        let note = format_note(old, new);
+        TextRow {
+            status: if note.is_empty() { "same" } else { "restyled" }.to_string(),
+            left: Some(text.clone()),
+            right: Some(text),
+            left_spans: Vec::new(),
+            right_spans: Vec::new(),
+            left_runs: old.runs.clone(),
+            right_runs: new.runs.clone(),
+            format_note: note,
+        }
     };
-    let removed_row = |text: String| TextRow {
+    let removed_row = |p: &Paragraph| TextRow {
         status: "removed".to_string(),
-        left: Some(text),
+        left: Some(p.text()),
         right: None,
         left_spans: Vec::new(),
         right_spans: Vec::new(),
+        left_runs: p.runs.clone(),
+        right_runs: Vec::new(),
+        format_note: String::new(),
     };
-    let added_row = |text: String| TextRow {
+    let added_row = |p: &Paragraph| TextRow {
         status: "added".to_string(),
         left: None,
-        right: Some(text),
+        right: Some(p.text()),
         left_spans: Vec::new(),
         right_spans: Vec::new(),
+        left_runs: Vec::new(),
+        right_runs: p.runs.clone(),
+        format_note: String::new(),
     };
 
     let mut rows = Vec::new();
     for op in diff.ops() {
         match *op {
-            similar::DiffOp::Equal { old_index, len, .. } => {
-                rows.extend((0..len).map(|i| same_row(older[old_index + i].clone())));
+            similar::DiffOp::Equal { old_index, new_index, len } => {
+                rows.extend(
+                    (0..len).map(|i| paired_row(&older[old_index + i], &newer[new_index + i])),
+                );
             }
             similar::DiffOp::Delete { old_index, old_len, .. } => {
-                rows.extend((0..old_len).map(|i| removed_row(older[old_index + i].clone())));
+                rows.extend((0..old_len).map(|i| removed_row(&older[old_index + i])));
             }
             similar::DiffOp::Insert { new_index, new_len, .. } => {
-                rows.extend((0..new_len).map(|i| added_row(newer[new_index + i].clone())));
+                rows.extend((0..new_len).map(|i| added_row(&newer[new_index + i])));
             }
             similar::DiffOp::Replace { old_index, old_len, new_index, new_len } => {
                 let paired = old_len.min(new_len);
                 for i in 0..paired {
-                    let (old_line, new_line) = (&older[old_index + i], &newer[new_index + i]);
+                    let (old_p, new_p) = (&older[old_index + i], &newer[new_index + i]);
 
                     // A replace block pairs lines by position, so two lines
                     // that are identical can end up married to each other when
@@ -561,26 +954,26 @@ pub fn diff_text(older: &[String], newer: &[String]) -> TextComparison {
                     // as "changed" put an unmarked paragraph across both
                     // columns with nothing to show for itself, and it never
                     // collapsed as unchanged because its status said otherwise.
-                    if old_line == new_line {
-                        rows.push(same_row(old_line.clone()));
+                    if old_p.text() == new_p.text() {
+                        rows.push(paired_row(old_p, new_p));
                         continue;
                     }
 
-                    let (left_spans, right_spans) = word_spans(old_line, new_line);
+                    let (old_line, new_line) = (old_p.text(), new_p.text());
+                    let (left_spans, right_spans) = word_spans(&old_line, &new_line);
                     rows.push(TextRow {
                         status: "changed".to_string(),
-                        left: Some(old_line.clone()),
-                        right: Some(new_line.clone()),
-                        left_spans,
-                        right_spans,
+                        left: Some(old_line),
+                        right: Some(new_line),
+                        left_spans: intersect_runs_and_spans(&old_p.runs, &left_spans),
+                        right_spans: intersect_runs_and_spans(&new_p.runs, &right_spans),
+                        left_runs: old_p.runs.clone(),
+                        right_runs: new_p.runs.clone(),
+                        format_note: String::new(),
                     });
                 }
-                rows.extend(
-                    (paired..old_len).map(|i| removed_row(older[old_index + i].clone())),
-                );
-                rows.extend(
-                    (paired..new_len).map(|i| added_row(newer[new_index + i].clone())),
-                );
+                rows.extend((paired..old_len).map(|i| removed_row(&older[old_index + i])));
+                rows.extend((paired..new_len).map(|i| added_row(&newer[new_index + i])));
             }
         }
     }
@@ -1135,6 +1528,10 @@ mod tests {
         assert_eq!(bytes, b"<cp:revision>55</cp:revision>");
     }
 
+    fn paragraph_texts(paragraphs: &[Paragraph]) -> Vec<String> {
+        paragraphs.iter().map(Paragraph::text).collect()
+    }
+
     #[test]
     fn extract_text_reads_a_two_paragraph_slide() {
         let xml = r#"<p:sld><p:cSld><p:spTree>
@@ -1142,8 +1539,8 @@ mod tests {
             <p:sp><p:txBody><a:p><a:r><a:t>Thanks for coming</a:t></a:r></a:p></p:txBody></p:sp>
         </p:spTree></p:cSld></p:sld>"#;
 
-        let lines = extract_text("ppt/slides/slide1.xml", xml.as_bytes());
-        assert_eq!(lines, vec!["Welcome", "Thanks for coming"]);
+        let paragraphs = extract_text("ppt/slides/slide1.xml", xml.as_bytes());
+        assert_eq!(paragraph_texts(&paragraphs), vec!["Welcome", "Thanks for coming"]);
     }
 
     #[test]
@@ -1154,8 +1551,9 @@ mod tests {
             <w:p><w:r><w:t>Hello </w:t></w:r><w:r><w:t>world</w:t></w:r></w:p>
         </w:body></w:document>"#;
 
-        let lines = extract_text("word/document.xml", xml.as_bytes());
-        assert_eq!(lines, vec!["Hello world"]);
+        let paragraphs = extract_text("word/document.xml", xml.as_bytes());
+        assert_eq!(paragraph_texts(&paragraphs), vec!["Hello world"]);
+        assert_eq!(paragraphs[0].runs.len(), 2, "each <w:r> stays its own run");
     }
 
     #[test]
@@ -1164,28 +1562,81 @@ mod tests {
             <w:p><w:r><w:t>Tom &amp; Jerry &lt;3</w:t></w:r></w:p>
         </w:body></w:document>"#;
 
-        let lines = extract_text("word/document.xml", xml.as_bytes());
-        assert_eq!(lines, vec!["Tom & Jerry <3"]);
+        let paragraphs = extract_text("word/document.xml", xml.as_bytes());
+        assert_eq!(paragraph_texts(&paragraphs), vec!["Tom & Jerry <3"]);
     }
 
     #[test]
     fn extract_text_reads_excel_shared_strings() {
         let xml = r#"<sst><si><t>Revenue</t></si><si><t>Q1 2024</t></si></sst>"#;
-        let lines = extract_text("xl/sharedStrings.xml", xml.as_bytes());
-        assert_eq!(lines, vec!["Revenue", "Q1 2024"]);
+        let paragraphs = extract_text("xl/sharedStrings.xml", xml.as_bytes());
+        assert_eq!(paragraph_texts(&paragraphs), vec!["Revenue", "Q1 2024"]);
     }
 
     #[test]
     fn extract_text_is_empty_for_an_unrecognised_part() {
-        assert_eq!(extract_text("ppt/theme/theme1.xml", b"<a:theme/>"), Vec::<String>::new());
-        assert_eq!(extract_text("docProps/core.xml", b"<cp:core/>"), Vec::<String>::new());
+        assert_eq!(extract_text("ppt/theme/theme1.xml", b"<a:theme/>"), Vec::<Paragraph>::new());
+        assert_eq!(extract_text("docProps/core.xml", b"<cp:core/>"), Vec::<Paragraph>::new());
     }
 
     #[test]
     fn extract_text_ignores_run_properties_that_share_the_run_tags_prefix() {
         // "a:rPr" (run properties) must never be mistaken for "a:r".
         let xml = r#"<a:p><a:r><a:rPr sz="1800"/><a:t>Sized text</a:t></a:r></a:p>"#;
-        assert_eq!(extract_text("ppt/slides/slide2.xml", xml.as_bytes()), vec!["Sized text"]);
+        let paragraphs = extract_text("ppt/slides/slide2.xml", xml.as_bytes());
+        assert_eq!(paragraph_texts(&paragraphs), vec!["Sized text"]);
+    }
+
+    #[test]
+    fn word_size_is_parsed_from_half_points() {
+        let xml = r#"<w:document><w:body>
+            <w:p><w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t>Body</w:t></w:r></w:p>
+        </w:body></w:document>"#;
+        let paragraphs = extract_text("word/document.xml", xml.as_bytes());
+        assert_eq!(paragraphs[0].runs[0].size_pt, Some(12.0));
+    }
+
+    #[test]
+    fn ppt_size_is_parsed_from_hundredths_of_a_point() {
+        let xml = r#"<a:p><a:r><a:rPr sz="1800"/><a:t>Heading</a:t></a:r></a:p>"#;
+        let paragraphs = extract_text("ppt/slides/slide3.xml", xml.as_bytes());
+        assert_eq!(paragraphs[0].runs[0].size_pt, Some(18.0));
+    }
+
+    #[test]
+    fn a_missing_property_stays_none_or_false() {
+        let xml = r#"<w:document><w:body>
+            <w:p><w:r><w:t>Plain</w:t></w:r></w:p>
+        </w:body></w:document>"#;
+        let paragraphs = extract_text("word/document.xml", xml.as_bytes());
+        let run = &paragraphs[0].runs[0];
+        assert!(!run.bold);
+        assert!(!run.italic);
+        assert!(!run.underline);
+        assert_eq!(run.size_pt, None);
+        assert_eq!(run.font, None);
+        assert_eq!(run.color, None);
+    }
+
+    #[test]
+    fn a_run_without_its_own_rpr_inherits_the_paragraph_default() {
+        let xml = r#"<w:document><w:body>
+            <w:p>
+                <w:pPr><w:rPr><w:b/><w:sz w:val="28"/></w:rPr></w:pPr>
+                <w:r><w:t>Inherits</w:t></w:r>
+                <w:r><w:rPr><w:b w:val="0"/></w:rPr><w:t>Overrides bold off</w:t></w:r>
+            </w:p>
+        </w:body></w:document>"#;
+        let paragraphs = extract_text("word/document.xml", xml.as_bytes());
+        let runs = &paragraphs[0].runs;
+        assert!(runs[0].bold);
+        assert_eq!(runs[0].size_pt, Some(14.0), "size still falls through to the paragraph default");
+        assert!(!runs[1].bold, "the run's own <w:b w:val=\"0\"/> wins over the paragraph default");
+        assert_eq!(runs[1].size_pt, Some(14.0));
+    }
+
+    fn plain(text: &str) -> Paragraph {
+        Paragraph { runs: vec![Run::plain(text.to_string())] }
     }
 
     fn row(status: &str, left: Option<&str>, right: Option<&str>) -> TextRow {
@@ -1195,6 +1646,9 @@ mod tests {
             right: right.map(str::to_string),
             left_spans: Vec::new(),
             right_spans: Vec::new(),
+            left_runs: left.map(|t| vec![Run::plain(t.to_string())]).unwrap_or_default(),
+            right_runs: right.map(|t| vec![Run::plain(t.to_string())]).unwrap_or_default(),
+            format_note: String::new(),
         }
     }
 
@@ -1204,18 +1658,22 @@ mod tests {
     /// columns, and it never collapsed as unchanged because its status lied.
     #[test]
     fn identical_lines_inside_a_replace_block_are_not_reported_as_changed() {
-        let older = vec![
-            "Opening paragraph.".to_string(),
-            "A line that really does change.".to_string(),
-            "Date: ___________________".to_string(),
-            "A trailing paragraph nobody touched.".to_string(),
-        ];
-        let newer = vec![
-            "Opening paragraph.".to_string(),
-            "A line that genuinely does change.".to_string(),
-            "Date: ___________________".to_string(),
-            "A trailing paragraph nobody touched.".to_string(),
-        ];
+        let older: Vec<Paragraph> = [
+            "Opening paragraph.",
+            "A line that really does change.",
+            "Date: ___________________",
+            "A trailing paragraph nobody touched.",
+        ]
+        .map(plain)
+        .to_vec();
+        let newer: Vec<Paragraph> = [
+            "Opening paragraph.",
+            "A line that genuinely does change.",
+            "Date: ___________________",
+            "A trailing paragraph nobody touched.",
+        ]
+        .map(plain)
+        .to_vec();
 
         let diff = diff_text(&older, &newer);
 
@@ -1236,8 +1694,8 @@ mod tests {
 
     #[test]
     fn diff_text_marks_an_unchanged_paragraph_as_same() {
-        let older = vec!["Welcome".to_string()];
-        let newer = vec!["Welcome".to_string()];
+        let older = vec![plain("Welcome")];
+        let newer = vec![plain("Welcome")];
 
         let result = diff_text(&older, &newer);
         assert!(result.has_text);
@@ -1246,13 +1704,13 @@ mod tests {
 
     #[test]
     fn diff_text_isolates_the_one_word_that_changed() {
-        let older = vec!["The quick brown fox".to_string()];
-        let newer = vec!["The quick red fox".to_string()];
+        let older = vec![plain("The quick brown fox")];
+        let newer = vec![plain("The quick red fox")];
 
         let result = diff_text(&older, &newer);
         assert_eq!(result.rows.len(), 1);
         let changed = &result.rows[0];
-        assert_eq!(changed.status, "changed");
+        assert_eq!(changed.status, "changed", "a text change, not just formatting, is still \"changed\"");
 
         // Only "brown"/"red" are marked - not the whole line.
         let changed_left: Vec<&str> = changed
@@ -1276,8 +1734,8 @@ mod tests {
 
     #[test]
     fn diff_text_marks_an_added_paragraph() {
-        let older = vec!["Intro".to_string()];
-        let newer = vec!["Intro".to_string(), "New section".to_string()];
+        let older = vec![plain("Intro")];
+        let newer = vec![plain("Intro"), plain("New section")];
 
         let result = diff_text(&older, &newer);
         assert_eq!(
@@ -1288,8 +1746,8 @@ mod tests {
 
     #[test]
     fn diff_text_marks_a_removed_paragraph() {
-        let older = vec!["Intro".to_string(), "Old section".to_string()];
-        let newer = vec!["Intro".to_string()];
+        let older = vec![plain("Intro"), plain("Old section")];
+        let newer = vec![plain("Intro")];
 
         let result = diff_text(&older, &newer);
         assert_eq!(
@@ -1303,5 +1761,67 @@ mod tests {
         let result = diff_text(&[], &[]);
         assert!(!result.has_text);
         assert!(result.rows.is_empty());
+    }
+
+    fn bold_run(text: &str) -> Run {
+        Run { bold: true, ..Run::plain(text.to_string()) }
+    }
+
+    #[test]
+    fn a_bold_only_change_is_restyled_with_a_sensible_note() {
+        let older = vec![Paragraph { runs: vec![Run::plain("Thank you for your patience.".to_string())] }];
+        let newer = vec![Paragraph { runs: vec![bold_run("Thank you for your patience.")] }];
+
+        let result = diff_text(&older, &newer);
+        assert_eq!(result.rows.len(), 1);
+        let restyled = &result.rows[0];
+        assert_eq!(restyled.status, "restyled");
+        assert_eq!(restyled.left, restyled.right, "a restyled row carries the same text on both sides");
+        assert_eq!(restyled.format_note, "now bold");
+        assert_eq!(restyled.left_runs[0].bold, false);
+        assert_eq!(restyled.right_runs[0].bold, true);
+    }
+
+    #[test]
+    fn a_fully_unchanged_paragraph_has_no_format_note() {
+        let older = vec![plain("Nothing moved.")];
+        let newer = vec![plain("Nothing moved.")];
+        let result = diff_text(&older, &newer);
+        assert_eq!(result.rows[0].status, "same");
+        assert_eq!(result.rows[0].format_note, "");
+    }
+
+    #[test]
+    fn intersecting_runs_and_spans_keeps_a_changed_word_bold() {
+        // "quick" sits entirely inside a bold run; "brown fox" is plain. Only
+        // "brown" differs between old and new.
+        let runs = vec![bold_run("The quick "), Run::plain("brown fox".to_string())];
+        let (left_spans, _) = word_spans("The quick brown fox", "The quick red fox");
+
+        let pieces = intersect_runs_and_spans(&runs, &left_spans);
+
+        // Reassembling the pieces must reproduce the original text exactly.
+        let reassembled: String = pieces.iter().map(|p| p.text.as_str()).collect();
+        assert_eq!(reassembled, "The quick brown fox");
+
+        let bold_piece = pieces.iter().find(|p| p.text == "The quick ").expect("a bold piece survives");
+        assert!(bold_piece.bold);
+        assert!(!bold_piece.changed);
+
+        let changed_piece = pieces.iter().find(|p| p.changed).expect("the changed word survives");
+        assert_eq!(changed_piece.text, "brown");
+        assert!(!changed_piece.bold, "the changed word sits in the plain run, not the bold one");
+    }
+
+    #[test]
+    fn intersecting_a_changed_word_inside_a_bold_run_marks_it_both_bold_and_changed() {
+        let runs = vec![bold_run("The quick brown fox")];
+        let (left_spans, _) = word_spans("The quick brown fox", "The quick red fox");
+
+        let pieces = intersect_runs_and_spans(&runs, &left_spans);
+
+        let changed_piece = pieces.iter().find(|p| p.changed).expect("the changed word survives");
+        assert_eq!(changed_piece.text, "brown");
+        assert!(changed_piece.bold, "the whole run is bold, so the changed word inside it is too");
     }
 }

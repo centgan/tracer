@@ -131,29 +131,100 @@ const COMPARE_RESULT = {
 // compare_part_text's fixture, for clicking "Slide 4" in the changed-parts
 // list. Deliberately long: enough paragraphs that the collapsed-run and
 // prev/next controls mean something, changes scattered through it rather
-// than bunched at the top, and one paragraph long enough to wrap across
-// several lines so the gutter's wrap behaviour is visible.
-const same = (text) => ({ status: "same", left: text, right: text, leftSpans: [], rightSpans: [] });
-const changed = (left, right, word, replacement) => ({
-  status: "changed",
-  left,
-  right,
-  leftSpans: [
-    { text: left.slice(0, left.indexOf(word)), changed: false },
-    { text: word, changed: true },
-    { text: left.slice(left.indexOf(word) + word.length), changed: false },
-  ],
-  rightSpans: [
-    { text: right.slice(0, right.indexOf(replacement)), changed: false },
-    { text: replacement, changed: true },
-    { text: right.slice(right.indexOf(replacement) + replacement.length), changed: false },
-  ],
+// than bunched at the top, one paragraph long enough to wrap across several
+// lines so the gutter's wrap behaviour is visible, and - to exercise
+// DESIGN.md's "Showing formatting" - a heading at a larger size, a bold and
+// an italic run, a paragraph restyled but not reworded, and a changed word
+// sitting inside a bold run.
+// 11pt is the default size, same as a real extracted document where nearly
+// every run carries an explicit <w:sz>/sz - without that, nothing in the
+// fixture would tell baselineSizePt() what "normal" is, and a lone heading
+// would have nothing to scale up from.
+const fmtRun = (text, overrides = {}) => ({
+  text,
+  bold: false,
+  italic: false,
+  underline: false,
+  sizePt: 11,
+  font: null,
+  color: null,
+  ...overrides,
 });
-const added = (text) => ({ status: "added", left: null, right: text, leftSpans: [], rightSpans: [] });
-const removed = (text) => ({ status: "removed", left: text, right: null, leftSpans: [], rightSpans: [] });
+
+const same = (text, runs) => ({
+  status: "same",
+  left: text,
+  right: text,
+  leftSpans: [],
+  rightSpans: [],
+  leftRuns: runs ?? [fmtRun(text)],
+  rightRuns: runs ?? [fmtRun(text)],
+  formatNote: "",
+});
+
+// `wordFormat` formats just the changed word/replacement (e.g. `{ bold: true
+// }` for a changed word that sits inside a bold run); `lineFormat` formats
+// the rest of the line (e.g. a document colour on text that didn't change,
+// to check it reads as content rather than as our own diff marking).
+const changed = (left, right, word, replacement, { wordFormat = {}, lineFormat = {} } = {}) => {
+  const span = (text, isChanged) => ({
+    ...fmtRun(text, isChanged ? wordFormat : lineFormat),
+    changed: isChanged,
+  });
+  const piece = (full, target) => {
+    const before = full.slice(0, full.indexOf(target));
+    const after = full.slice(full.indexOf(target) + target.length);
+    return [span(before, false), span(target, true), span(after, false)].filter((s) => s.text.length > 0);
+  };
+  return {
+    status: "changed",
+    left,
+    right,
+    leftSpans: piece(left, word),
+    rightSpans: piece(right, replacement),
+    leftRuns: [fmtRun(left, lineFormat)],
+    rightRuns: [fmtRun(right, lineFormat)],
+    formatNote: "",
+  };
+};
+
+const added = (text) => ({
+  status: "added",
+  left: null,
+  right: text,
+  leftSpans: [],
+  rightSpans: [],
+  leftRuns: [],
+  rightRuns: [fmtRun(text)],
+  formatNote: "",
+});
+
+const removed = (text) => ({
+  status: "removed",
+  left: text,
+  right: null,
+  leftSpans: [],
+  rightSpans: [],
+  leftRuns: [fmtRun(text)],
+  rightRuns: [],
+  formatNote: "",
+});
+
+// Identical text, reformatted - previously invisible to the comparison.
+const restyled = (text, leftRun, rightRun, formatNote) => ({
+  status: "restyled",
+  left: text,
+  right: text,
+  leftSpans: [],
+  rightSpans: [],
+  leftRuns: [fmtRun(text, leftRun)],
+  rightRuns: [fmtRun(text, rightRun)],
+  formatNote,
+});
 
 const TEXT_COMPARISON = {
   rows: [
+    same("Q3 Business Review", [fmtRun("Q3 Business Review", { bold: true, sizePt: 20 })]),
     same("Thank you for your continued partnership this quarter."),
     same(
       "Our engineering team shipped four major releases during the quarter, closing out a sustained backlog of customer-requested improvements across the reporting dashboard, the mobile client, and the underlying data pipeline that feeds every downstream integration our partners depend on.",
@@ -165,10 +236,36 @@ const TEXT_COMPARISON = {
       "12%",
       "18%",
     ),
+    // Document colour on text that didn't change, sitting right beside the
+    // diff's own green/red - the test of whether the two stay visually
+    // distinct (DESIGN.md's "Showing formatting").
+    same("Note: all figures below are preliminary until the books close Friday.", [
+      fmtRun("Note:", { bold: true, color: "C00000" }),
+      fmtRun(" all figures below are preliminary until the books close Friday.", {}),
+    ]),
+    changed(
+      "Status: on track for the January launch.",
+      "Status: delayed for the January launch.",
+      "on track",
+      "delayed",
+      { lineFormat: { color: "2E5AAC" } },
+    ),
     same("Customer churn held flat at just under two percent."),
-    same("Support tickets per seat continued trending downward."),
+    same(
+      "Support tickets per seat continued trending downward, which the team credits to the onboarding changes shipped last quarter.",
+      [
+        fmtRun("Support tickets per seat continued trending downward, which the team credits to the ", {}),
+        fmtRun("onboarding changes", { italic: true }),
+        fmtRun(" shipped last quarter.", {}),
+      ],
+    ),
     same("The onboarding team closed out its backlog in record time."),
-    same("Marketing spend tracked within two percent of budget."),
+    restyled(
+      "Marketing spend tracked within two percent of budget.",
+      {},
+      { font: "Georgia" },
+      "default → Georgia",
+    ),
     same("Every region met its quarterly hiring plan."),
     same("The platform's uptime held above our internal target."),
     same("Legal finished its review of the updated vendor contracts."),
@@ -183,9 +280,18 @@ const TEXT_COMPARISON = {
       "The team expects a one week rollout window for this change.",
       "two",
       "one",
+      // The whole run is bold, same as a real bold-emphasised line - not
+      // just the one word, so this actually exercises "a changed word
+      // inside a bold run" rather than making the diff mark look bold.
+      { wordFormat: { bold: true }, lineFormat: { bold: true } },
     ),
     same("Third, the reporting dashboard adds a cohort view."),
-    same("None of this changes the roadmap we shared in January."),
+    restyled(
+      "None of this changes the roadmap we shared in January.",
+      {},
+      { bold: true },
+      "now bold",
+    ),
     same("We remain on track for the targets set at the offsite."),
     same("Thank you again for the trust you've placed in the team."),
   ],

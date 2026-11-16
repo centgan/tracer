@@ -213,7 +213,7 @@ fn compare_part_text(
     entry_name: String,
     state: State<'_, AppState>,
 ) -> Result<engine::TextComparison, String> {
-    let part_text = |revision_id: i64| -> Result<Vec<String>, String> {
+    let part_text = |revision_id: i64| -> Result<Vec<engine::Paragraph>, String> {
         let part = {
             let conn = lock(&state)?;
             db::get_revision_parts(&conn, revision_id)

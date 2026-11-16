@@ -1,13 +1,44 @@
 import { describe, expect, it } from "vitest";
-import { collapseUnchanged } from "./textcompare";
-import type { TextRow } from "./types";
+import { baselineSizePt, collapseUnchanged, pieceStyle } from "./textcompare";
+import type { Run, TextRow } from "./types";
+
+function run(text: string, overrides: Partial<Run> = {}): Run {
+  return {
+    text,
+    bold: false,
+    italic: false,
+    underline: false,
+    sizePt: null,
+    font: null,
+    color: null,
+    ...overrides,
+  };
+}
 
 function same(text: string): TextRow {
-  return { status: "same", left: text, right: text, leftSpans: [], rightSpans: [] };
+  return {
+    status: "same",
+    left: text,
+    right: text,
+    leftSpans: [],
+    rightSpans: [],
+    leftRuns: [run(text)],
+    rightRuns: [run(text)],
+    formatNote: "",
+  };
 }
 
 function removed(text: string): TextRow {
-  return { status: "removed", left: text, right: null, leftSpans: [], rightSpans: [] };
+  return {
+    status: "removed",
+    left: text,
+    right: null,
+    leftSpans: [],
+    rightSpans: [],
+    leftRuns: [run(text)],
+    rightRuns: [],
+    formatNote: "",
+  };
 }
 
 describe("collapseUnchanged", () => {
@@ -49,5 +80,60 @@ describe("collapseUnchanged", () => {
     expect(collapseUnchanged(rows)).toEqual(
       rows.map((row, i) => ({ kind: "row", row, line: i + 1 })),
     );
+  });
+});
+
+describe("baselineSizePt", () => {
+  it("picks the size covering the most characters, not the most runs", () => {
+    const rows: TextRow[] = [
+      {
+        status: "same",
+        left: "x",
+        right: "x",
+        leftSpans: [],
+        rightSpans: [],
+        leftRuns: [run("A heading", { sizePt: 28 }), run("ten short bits of 11pt body text", { sizePt: 11 })],
+        rightRuns: [],
+        formatNote: "",
+      },
+    ];
+    expect(baselineSizePt(rows)).toBe(11);
+  });
+
+  it("defaults to 12 when nothing in the comparison carries a size", () => {
+    expect(baselineSizePt([same("Plain text")])).toBe(12);
+  });
+});
+
+describe("pieceStyle", () => {
+  it("renders bold, italic and a proportional size", () => {
+    const style = pieceStyle(run("Heading", { bold: true, italic: true, sizePt: 18 }), 12, null);
+    expect(style).toContain("font-weight: bold");
+    expect(style).toContain("font-style: italic");
+    expect(style).toContain("font-size: 1.50em");
+  });
+
+  it("clamps an extreme size so nothing becomes unreadable or takes over the pane", () => {
+    const huge = pieceStyle(run("Title", { sizePt: 96 }), 12, null);
+    expect(huge).toContain("font-size: 1.70em");
+
+    const tiny = pieceStyle(run("Footnote", { sizePt: 2 }), 12, null);
+    expect(tiny).toContain("font-size: 0.85em");
+  });
+
+  it("lets a document colour win over the interface's removed/added colour", () => {
+    const style = pieceStyle(run("word", { color: "FF0000" }), 12, "removed");
+    expect(style).toContain("color: #FF0000");
+    expect(style).not.toContain("var(--diff-remove)");
+  });
+
+  it("falls back to the interface colour when the document carries none", () => {
+    const style = pieceStyle(run("word"), 12, "added");
+    expect(style).toContain("color: var(--diff-add)");
+  });
+
+  it("combines a document underline with the removed strikethrough", () => {
+    const style = pieceStyle(run("word", { underline: true }), 12, "removed");
+    expect(style).toContain("text-decoration-line: underline line-through");
   });
 });

@@ -37,7 +37,14 @@ describe("formatFileStats", () => {
 });
 
 describe("formatSessionSpan", () => {
-  const at = (h: number, m: number) => new Date(2026, 10, 15, h, m).getTime() / 1000;
+  // Anchored to today, not a fixed calendar date. A hardcoded date silently
+  // ages out of the "today" branch and the test starts failing on a day nobody
+  // changed anything.
+  const at = (h: number, m: number) => {
+    const d = new Date();
+    d.setHours(h, m, 0, 0);
+    return d.getTime() / 1000;
+  };
 
   it("says the meridiem once so the span fits its column", () => {
     const span = formatSessionSpan(at(14, 22), at(14, 37));

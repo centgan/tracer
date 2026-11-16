@@ -206,3 +206,23 @@ moved.
 
 Colour still never works alone: the markers, the gutter and the side a line
 sits on each say the same thing.
+
+### Showing formatting
+
+A comparison renders each paragraph the way the document does: bold is bold,
+italic is italic, a larger heading is larger. Seeing a change is faster than
+reading a description of one, and a document that looks like itself is easier
+to recognise than a transcript of it.
+
+Sizes are rendered in proportion, not in absolute points - a 28pt title in a
+list of 11pt body text should read as a title, not take over the pane - and
+clamped so nothing becomes unreadably small or absurdly large.
+
+**A font family is named, never faked.** We can render weight, slant and size
+faithfully, but we cannot know whether the reader has Georgia installed. A
+silent substitution would show a difference that isn't there, or hide one that
+is, so when the font changes the comparison says so in words.
+
+A paragraph whose words are identical but whose formatting changed is a change,
+and it was previously invisible. It appears once, not duplicated across the
+columns, marked `~`, with the difference spelled out beside it.

@@ -819,15 +819,41 @@ fn format_pt(pt: f32) -> String {
     }
 }
 
+/// Character-aligns `old`'s and `new`'s runs (both partition the same
+/// text, since `format_note` only ever runs on a pair whose text is
+/// identical) and returns the first pair of runs whose formatting actually
+/// differs - a word restyled in the middle of an otherwise-untouched
+/// paragraph is still the run that matters, not `runs[0]`.
+fn first_restyled_run<'a>(old: &'a Paragraph, new: &'a Paragraph) -> Option<(&'a Run, &'a Run)> {
+    let old_chars: Vec<usize> =
+        old.runs.iter().enumerate().flat_map(|(i, r)| r.text.chars().map(move |_| i)).collect();
+    let new_chars: Vec<usize> =
+        new.runs.iter().enumerate().flat_map(|(i, r)| r.text.chars().map(move |_| i)).collect();
+
+    // Lengths always match for a `paired_row` call - defensively fall back
+    // to comparing the first runs if they somehow don't.
+    if old_chars.len() != new_chars.len() {
+        return old.runs.first().zip(new.runs.first());
+    }
+
+    old_chars.into_iter().zip(new_chars).map(|(oi, ni)| (&old.runs[oi], &new.runs[ni])).find(
+        |(o, n)| {
+            o.font != n.font
+                || o.size_pt != n.size_pt
+                || o.bold != n.bold
+                || o.italic != n.italic
+                || o.underline != n.underline
+                || o.color != n.color
+        },
+    )
+}
+
 /// Plain-language summary of a formatting-only change between two paragraphs
 /// whose text is identical, comparing only what a reader actually notices -
-/// font, size, bold, italic, underline, colour. Uses each paragraph's first
-/// run as its representative formatting: Office applies one style per
-/// paragraph in the overwhelming common case, and a mixed-run paragraph
-/// still gets the most visible change described rather than every run's.
-/// Empty when nothing a reader would notice changed.
+/// font, size, bold, italic, underline, colour. Empty when nothing a reader
+/// would notice changed.
 fn format_note(old: &Paragraph, new: &Paragraph) -> String {
-    let (Some(old_run), Some(new_run)) = (old.runs.first(), new.runs.first()) else {
+    let Some((old_run, new_run)) = first_restyled_run(old, new) else {
         return String::new();
     };
 
@@ -1789,6 +1815,30 @@ mod tests {
         let result = diff_text(&older, &newer);
         assert_eq!(result.rows[0].status, "same");
         assert_eq!(result.rows[0].format_note, "");
+    }
+
+    fn font_run(text: &str, font: &str) -> Run {
+        Run { font: Some(font.to_string()), ..Run::plain(text.to_string()) }
+    }
+
+    /// Reproduces a real document: "Provide a short summary of the..." where
+    /// only the word "summary" was given an explicit font. The first run of
+    /// the paragraph ("Provide a short ") never changes, so a representative
+    /// check that only ever looks at runs[0] sees nothing - even though a
+    /// reader opening the file sees the restyled word right away.
+    #[test]
+    fn a_font_change_on_a_run_other_than_the_first_is_still_reported() {
+        let older = vec![Paragraph {
+            runs: vec![Run::plain("Provide a short ".to_string()), Run::plain("summary".to_string())],
+        }];
+        let newer = vec![Paragraph {
+            runs: vec![Run::plain("Provide a short ".to_string()), font_run("summary", "Times New Roman")],
+        }];
+
+        let result = diff_text(&older, &newer);
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].status, "restyled", "a mid-paragraph font change must not collapse as unchanged");
+        assert_eq!(result.rows[0].format_note, "font now Times New Roman");
     }
 
     #[test]

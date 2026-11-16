@@ -420,8 +420,26 @@
     background: var(--diff-remove-bg);
   }
 
+  /* A paragraph that is gone entirely gets struck through, in the removed
+     colour, on the older side only. A tint alone left it looking like a line
+     that merely moved; this says deleted. */
+  .text-cell.removed .line-text {
+    color: var(--diff-remove);
+    text-decoration: line-through;
+    text-decoration-thickness: 1px;
+  }
+
+  .text-cell.removed .marker,
+  .text-cell.added .marker {
+    text-decoration: none;
+  }
+
   .text-cell.added {
     background: var(--diff-add-bg);
+  }
+
+  .text-cell.added .line-text {
+    color: var(--diff-add);
   }
 
   /* A changed line shows on both sides, so stacked it would otherwise be two

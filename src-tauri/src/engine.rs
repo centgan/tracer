@@ -554,6 +554,18 @@ pub fn diff_text(older: &[String], newer: &[String]) -> TextComparison {
                 let paired = old_len.min(new_len);
                 for i in 0..paired {
                     let (old_line, new_line) = (&older[old_index + i], &newer[new_index + i]);
+
+                    // A replace block pairs lines by position, so two lines
+                    // that are identical can end up married to each other when
+                    // the real edit is elsewhere in the block. Reporting those
+                    // as "changed" put an unmarked paragraph across both
+                    // columns with nothing to show for itself, and it never
+                    // collapsed as unchanged because its status said otherwise.
+                    if old_line == new_line {
+                        rows.push(same_row(old_line.clone()));
+                        continue;
+                    }
+
                     let (left_spans, right_spans) = word_spans(old_line, new_line);
                     rows.push(TextRow {
                         status: "changed".to_string(),
@@ -1183,6 +1195,42 @@ mod tests {
             right: right.map(str::to_string),
             left_spans: Vec::new(),
             right_spans: Vec::new(),
+        }
+    }
+
+    /// A replace block pairs lines by position, so an identical line can be
+    /// paired with itself while the real edit sits elsewhere in the block.
+    /// Reporting that as "changed" showed an unmarked paragraph across both
+    /// columns, and it never collapsed as unchanged because its status lied.
+    #[test]
+    fn identical_lines_inside_a_replace_block_are_not_reported_as_changed() {
+        let older = vec![
+            "Opening paragraph.".to_string(),
+            "A line that really does change.".to_string(),
+            "Date: ___________________".to_string(),
+            "A trailing paragraph nobody touched.".to_string(),
+        ];
+        let newer = vec![
+            "Opening paragraph.".to_string(),
+            "A line that genuinely does change.".to_string(),
+            "Date: ___________________".to_string(),
+            "A trailing paragraph nobody touched.".to_string(),
+        ];
+
+        let diff = diff_text(&older, &newer);
+
+        let changed: Vec<&TextRow> = diff.rows.iter().filter(|r| r.status != "same").collect();
+        assert_eq!(changed.len(), 1, "only one line actually differs: {:?}",
+            diff.rows.iter().map(|r| (&r.status, &r.left)).collect::<Vec<_>>());
+
+        for row in &diff.rows {
+            if row.status == "changed" {
+                assert_ne!(row.left, row.right, "a changed row must actually differ");
+                assert!(
+                    row.left_spans.iter().any(|s| s.changed),
+                    "a changed row must mark the words that differ"
+                );
+            }
         }
     }
 

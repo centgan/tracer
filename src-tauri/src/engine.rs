@@ -819,33 +819,62 @@ fn format_pt(pt: f32) -> String {
     }
 }
 
-/// Character-aligns `old`'s and `new`'s runs (both partition the same
-/// text, since `format_note` only ever runs on a pair whose text is
-/// identical) and returns the first pair of runs whose formatting actually
-/// differs - a word restyled in the middle of an otherwise-untouched
-/// paragraph is still the run that matters, not `runs[0]`.
-fn first_restyled_run<'a>(old: &'a Paragraph, new: &'a Paragraph) -> Option<(&'a Run, &'a Run)> {
+/// Character-aligns `old`'s and `new`'s runs - both partition the same
+/// text, since this only ever runs on a pair whose text is identical - as
+/// `(old run index, new run index)` for every character. `None` if the
+/// texts turn out not to match after all (shouldn't happen for a
+/// `paired_row` call; callers fall back to something defensive).
+fn align_runs(old: &Paragraph, new: &Paragraph) -> Option<Vec<(usize, usize)>> {
     let old_chars: Vec<usize> =
         old.runs.iter().enumerate().flat_map(|(i, r)| r.text.chars().map(move |_| i)).collect();
     let new_chars: Vec<usize> =
         new.runs.iter().enumerate().flat_map(|(i, r)| r.text.chars().map(move |_| i)).collect();
 
-    // Lengths always match for a `paired_row` call - defensively fall back
-    // to comparing the first runs if they somehow don't.
     if old_chars.len() != new_chars.len() {
-        return old.runs.first().zip(new.runs.first());
+        return None;
     }
+    Some(old_chars.into_iter().zip(new_chars).collect())
+}
 
-    old_chars.into_iter().zip(new_chars).map(|(oi, ni)| (&old.runs[oi], &new.runs[ni])).find(
-        |(o, n)| {
-            o.font != n.font
-                || o.size_pt != n.size_pt
-                || o.bold != n.bold
-                || o.italic != n.italic
-                || o.underline != n.underline
-                || o.color != n.color
-        },
-    )
+/// Whether two runs differ in anything a reader would actually notice -
+/// font, size, bold, italic, underline, colour.
+fn runs_differ(old: &Run, new: &Run) -> bool {
+    old.font != new.font
+        || old.size_pt != new.size_pt
+        || old.bold != new.bold
+        || old.italic != new.italic
+        || old.underline != new.underline
+        || old.color != new.color
+}
+
+/// The first pair of character-aligned runs whose formatting actually
+/// differs - a word restyled in the middle of an otherwise-untouched
+/// paragraph is still the run that matters, not `runs[0]`.
+fn first_restyled_run<'a>(old: &'a Paragraph, new: &'a Paragraph) -> Option<(&'a Run, &'a Run)> {
+    match align_runs(old, new) {
+        Some(pairs) => {
+            pairs.into_iter().map(|(oi, ni)| (&old.runs[oi], &new.runs[ni])).find(|(o, n)| runs_differ(o, n))
+        }
+        // Lengths always match for a `paired_row` call - defensively fall
+        // back to comparing the first runs if they somehow don't.
+        None => old.runs.first().zip(new.runs.first()),
+    }
+}
+
+/// One span per character of `new`'s text, marked `changed` wherever its run's
+/// formatting actually differs from the run occupying the same character in
+/// `old`. Feeds `intersect_runs_and_spans` the same way a word-level text
+/// diff does for a "changed" row, so a restyled word gets marked precisely
+/// rather than leaving the reader to take a paragraph-wide note on faith.
+fn format_diff_marks(old: &Paragraph, new: &Paragraph) -> Vec<TextSpan> {
+    let Some(pairs) = align_runs(old, new) else { return Vec::new() };
+    let new_chars = new.runs.iter().flat_map(|r| r.text.chars());
+
+    pairs
+        .iter()
+        .zip(new_chars)
+        .map(|(&(oi, ni), c)| TextSpan::plain(c.to_string(), runs_differ(&old.runs[oi], &new.runs[ni])))
+        .collect()
 }
 
 /// Plain-language summary of a formatting-only change between two paragraphs
@@ -923,12 +952,20 @@ pub fn diff_text(older: &[Paragraph], newer: &[Paragraph]) -> TextComparison {
     let paired_row = |old: &Paragraph, new: &Paragraph| -> TextRow {
         let text = old.text();
         let note = format_note(old, new);
+        // Only worth marking spans when there's a restyle to point at -
+        // otherwise this is a plain "same" row the frontend never renders
+        // through the spans path.
+        let right_spans = if note.is_empty() {
+            Vec::new()
+        } else {
+            intersect_runs_and_spans(&new.runs, &format_diff_marks(old, new))
+        };
         TextRow {
             status: if note.is_empty() { "same" } else { "restyled" }.to_string(),
             left: Some(text.clone()),
             right: Some(text),
             left_spans: Vec::new(),
-            right_spans: Vec::new(),
+            right_spans,
             left_runs: old.runs.clone(),
             right_runs: new.runs.clone(),
             format_note: note,
@@ -1837,8 +1874,17 @@ mod tests {
 
         let result = diff_text(&older, &newer);
         assert_eq!(result.rows.len(), 1);
-        assert_eq!(result.rows[0].status, "restyled", "a mid-paragraph font change must not collapse as unchanged");
-        assert_eq!(result.rows[0].format_note, "font now Times New Roman");
+        let restyled = &result.rows[0];
+        assert_eq!(restyled.status, "restyled", "a mid-paragraph font change must not collapse as unchanged");
+        assert_eq!(restyled.format_note, "font now Times New Roman");
+
+        // The note names a single font, but the paragraph has two runs - a
+        // reader needs to see *which* word that refers to, not take a
+        // sentence-level caption on faith.
+        assert_eq!(
+            restyled.right_spans.iter().map(|s| (s.text.as_str(), s.changed)).collect::<Vec<_>>(),
+            vec![("Provide a short ", false), ("summary", true)],
+        );
     }
 
     #[test]

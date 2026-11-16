@@ -155,6 +155,14 @@
             >{/each}
         {/snippet}
 
+        {#snippet formattedRestyledSpans(pieces: TextSpan[])}
+          {#each pieces as piece}
+            <span class:restyled-word={piece.changed} style={pieceStyle(piece, baseline, null)}
+              >{piece.text}</span
+            >
+          {/each}
+        {/snippet}
+
         {#snippet formattedSpans(pieces: TextSpan[], side: "left" | "right")}
           {#each pieces as piece}
             <span
@@ -189,11 +197,18 @@
               <span class="line-text">
                 <span class="marker" aria-hidden="true">~&nbsp;</span>
                 <!-- The newer side's formatting - the paragraph as the
-                     document looks now - with the note saying what it used
-                     to be. -->
-                {@render formattedRuns(item.row.rightRuns, null)}
-                <span class="format-note">{item.row.formatNote}</span>
+                     document looks now - with the restyled word itself
+                     highlighted, so the caption below only has to confirm
+                     what changed rather than say where. -->
+                {#if item.row.rightSpans.length > 0}
+                  {@render formattedRestyledSpans(item.row.rightSpans)}
+                {:else}
+                  {@render formattedRuns(item.row.rightRuns, null)}
+                {/if}
               </span>
+              {#if item.row.formatNote}
+                <div class="format-note">({item.row.formatNote})</div>
+              {/if}
             </div>
           {:else}
             <div
@@ -523,8 +538,21 @@
     opacity: 0.8;
   }
 
+  /* Marks exactly the word a restyle actually touched - a tint, not an
+     underline, so it never collides with a document underline pieceStyle()
+     renders on the same word. No colour of its own, same reasoning as the
+     row's own marker above. */
+  .restyled-word {
+    background: color-mix(in srgb, currentColor 16%, transparent);
+    border-radius: 2px;
+  }
+
+  /* Its own line below the paragraph, not appended after it - inline, it
+     read as a stray continuation of the document's own sentence. Indented
+     to roughly where the text above it starts (2em gutter + 6px gap, same
+     as every other row's grid). */
   .format-note {
-    margin-left: 0.6em;
+    margin-left: calc(2em + 6px);
     font-size: 11px;
     font-style: italic;
     opacity: 0.68;

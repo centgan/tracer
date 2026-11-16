@@ -222,6 +222,26 @@ const restyled = (text, leftRun, rightRun, formatNote) => ({
   formatNote,
 });
 
+// Restyled, but only one word in the paragraph actually changed format - the
+// real case that sent us here (see PR #7): the backend now marks exactly
+// that word in rightSpans instead of leaving the whole line unmarked.
+const restyledWord = (before, word, after, overrides, formatNote) => {
+  const text = `${before}${word}${after}`;
+  const piece = (t, changed) => ({ ...fmtRun(t, changed ? overrides : {}), changed });
+  return {
+    status: "restyled",
+    left: text,
+    right: text,
+    leftSpans: [],
+    rightSpans: [piece(before, false), piece(word, true), piece(after, false)].filter(
+      (s) => s.text.length > 0,
+    ),
+    leftRuns: [fmtRun(before), fmtRun(word), fmtRun(after)].filter((r) => r.text.length > 0),
+    rightRuns: [fmtRun(before), fmtRun(word, overrides), fmtRun(after)].filter((r) => r.text.length > 0),
+    formatNote,
+  };
+};
+
 const TEXT_COMPARISON = {
   rows: [
     same("Q3 Business Review", [fmtRun("Q3 Business Review", { bold: true, sizePt: 20 })]),
@@ -266,6 +286,13 @@ const TEXT_COMPARISON = {
       { font: "Georgia" },
       "default → Georgia",
     ),
+    restyledWord(
+      "Provide a short ",
+      "summary",
+      " of the project and lab activities.",
+      { font: "Times New Roman" },
+      "font now Times New Roman",
+    ),
     same("Every region met its quarterly hiring plan."),
     same("The platform's uptime held above our internal target."),
     same("Legal finished its review of the updated vendor contracts."),
@@ -294,6 +321,17 @@ const TEXT_COMPARISON = {
     ),
     same("We remain on track for the targets set at the offsite."),
     same("Thank you again for the trust you've placed in the team."),
+    // A long unchanged tail with no further change after it - the case from
+    // PR #7: these used to show their last two lines as "context" for
+    // nothing, since there's no later change for them to lead into.
+    same("Appendix A: distribution list."),
+    same("Finance - quarterly close owners."),
+    same("Engineering - release leads for the four shipped features."),
+    same("Marketing - campaign owners for the enterprise tier launch."),
+    same("Support - onboarding specialists."),
+    same("Legal - vendor contract reviewers."),
+    same("Prepared by the operations team."),
+    same("Distribution: all department heads."),
   ],
   hasText: true,
 };

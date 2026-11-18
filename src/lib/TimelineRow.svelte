@@ -67,11 +67,10 @@
     background: var(--face-hover);
   }
 
-  @media (prefers-reduced-motion: no-preference) {
-    .row:not(.selected) {
-      transition: background-color 1.2s ease;
-    }
-  }
+  /* No transition on background. A slow fade was here to soften the live
+     arrival highlight, but it applied to every row, so deselecting one left it
+     fizzling out for over a second and selection felt laggy. Selection has to
+     be instant; the arrival cue is carried by the "new" flag instead. */
 
   .row.flash:not(.selected) {
     background: var(--flash);

@@ -67,7 +67,26 @@ const sparseVersions = [
   parentId: v.id === 1 ? null : v.id - 1,
 }));
 
-const TIMELINES = { 1: versions, 3: sparseVersions };
+// Just enough history on the deck to drive the compare flow: a named older
+// version and today's unnamed one, far enough apart they never collapse into
+// one session.
+const deckVersions = [
+  { id: 102, ts: now - 10 * 60, milestone: null },
+  { id: 101, ts: now - 2 * day, milestone: "first full draft" },
+].map((v, i) => ({
+  id: v.id,
+  fileId: 2,
+  timestamp: v.ts,
+  byteSize: 5_204_000 - i * 1800,
+  manifestHash: `hash-${v.id}`,
+  partCount: 58,
+  milestone: v.milestone,
+  authorName: "Eric Feng",
+  authorEmail: "eric@example.com",
+  parentId: v.id === 101 ? null : v.id - 1,
+}));
+
+const TIMELINES = { 1: versions, 2: deckVersions, 3: sparseVersions };
 
 // Dedup payoff per file, independent of the timeline's own length. The sparse
 // file has one version's worth of history and nothing shared yet, so stats
@@ -78,11 +97,246 @@ const FILE_STATS = {
     logicalBytes: versions.reduce((sum, v) => sum + v.byteSize, 0),
     storedBytes: Math.round(versions.reduce((sum, v) => sum + v.byteSize, 0) * 0.22),
   },
+  2: {
+    versionCount: deckVersions.length,
+    logicalBytes: deckVersions.reduce((sum, v) => sum + v.byteSize, 0),
+    storedBytes: Math.round(deckVersions.reduce((sum, v) => sum + v.byteSize, 0) * 0.3),
+  },
   3: {
     versionCount: sparseVersions.length,
     logicalBytes: sparseVersions.reduce((sum, v) => sum + v.byteSize, 0),
     storedBytes: sparseVersions.reduce((sum, v) => sum + v.byteSize, 0) + 500,
   },
+};
+
+// compare_revisions's fixture: a realistic pptx diff. A couple of changed
+// slides, one picture added, one removed, and several bookkeeping entries
+// (docProps, [Content_Types].xml, _rels) that must never surface as named
+// changes - only their count should.
+const COMPARE_RESULT = {
+  changes: [
+    { entryName: "[Content_Types].xml", status: "changed" },
+    { entryName: "docProps/app.xml", status: "changed" },
+    { entryName: "docProps/core.xml", status: "changed" },
+    { entryName: "ppt/_rels/presentation.xml.rels", status: "changed" },
+    { entryName: "ppt/media/image11.png", status: "added" },
+    { entryName: "ppt/media/image3.png", status: "removed" },
+    { entryName: "ppt/slides/_rels/slide4.xml.rels", status: "changed" },
+    { entryName: "ppt/slides/slide4.xml", status: "changed" },
+    { entryName: "ppt/slides/slide9.xml", status: "changed" },
+  ].sort((a, b) => a.entryName.localeCompare(b.entryName)),
+  unchangedCount: 49,
+};
+
+// compare_part_text's fixture, for clicking "Slide 4" in the changed-parts
+// list. Deliberately long: enough paragraphs that the collapsed-run and
+// prev/next controls mean something, changes scattered through it rather
+// than bunched at the top, one paragraph long enough to wrap across several
+// lines so the gutter's wrap behaviour is visible, and - to exercise
+// DESIGN.md's "Showing formatting" - a heading at a larger size, a bold and
+// an italic run, a paragraph restyled but not reworded, and a changed word
+// sitting inside a bold run.
+// 11pt is the default size, same as a real extracted document where nearly
+// every run carries an explicit <w:sz>/sz - without that, nothing in the
+// fixture would tell baselineSizePt() what "normal" is, and a lone heading
+// would have nothing to scale up from.
+const fmtRun = (text, overrides = {}) => ({
+  text,
+  bold: false,
+  italic: false,
+  underline: false,
+  sizePt: 11,
+  font: null,
+  color: null,
+  ...overrides,
+});
+
+const same = (text, runs) => ({
+  status: "same",
+  left: text,
+  right: text,
+  leftSpans: [],
+  rightSpans: [],
+  leftRuns: runs ?? [fmtRun(text)],
+  rightRuns: runs ?? [fmtRun(text)],
+  formatNote: "",
+});
+
+// `wordFormat` formats just the changed word/replacement (e.g. `{ bold: true
+// }` for a changed word that sits inside a bold run); `lineFormat` formats
+// the rest of the line (e.g. a document colour on text that didn't change,
+// to check it reads as content rather than as our own diff marking).
+const changed = (left, right, word, replacement, { wordFormat = {}, lineFormat = {} } = {}) => {
+  const span = (text, isChanged) => ({
+    ...fmtRun(text, isChanged ? wordFormat : lineFormat),
+    changed: isChanged,
+  });
+  const piece = (full, target) => {
+    const before = full.slice(0, full.indexOf(target));
+    const after = full.slice(full.indexOf(target) + target.length);
+    return [span(before, false), span(target, true), span(after, false)].filter((s) => s.text.length > 0);
+  };
+  return {
+    status: "changed",
+    left,
+    right,
+    leftSpans: piece(left, word),
+    rightSpans: piece(right, replacement),
+    leftRuns: [fmtRun(left, lineFormat)],
+    rightRuns: [fmtRun(right, lineFormat)],
+    formatNote: "",
+  };
+};
+
+const added = (text) => ({
+  status: "added",
+  left: null,
+  right: text,
+  leftSpans: [],
+  rightSpans: [],
+  leftRuns: [],
+  rightRuns: [fmtRun(text)],
+  formatNote: "",
+});
+
+const removed = (text) => ({
+  status: "removed",
+  left: text,
+  right: null,
+  leftSpans: [],
+  rightSpans: [],
+  leftRuns: [fmtRun(text)],
+  rightRuns: [],
+  formatNote: "",
+});
+
+// Identical text, reformatted - previously invisible to the comparison.
+const restyled = (text, leftRun, rightRun, formatNote) => ({
+  status: "restyled",
+  left: text,
+  right: text,
+  leftSpans: [],
+  rightSpans: [],
+  leftRuns: [fmtRun(text, leftRun)],
+  rightRuns: [fmtRun(text, rightRun)],
+  formatNote,
+});
+
+// Restyled, but only one word in the paragraph actually changed format - the
+// real case that sent us here (see PR #7): the backend now marks exactly
+// that word in rightSpans instead of leaving the whole line unmarked.
+const restyledWord = (before, word, after, overrides, formatNote) => {
+  const text = `${before}${word}${after}`;
+  const spans = (useOverrides) => {
+    const piece = (t, changed) => ({ ...fmtRun(t, changed && useOverrides ? overrides : {}), changed });
+    return [piece(before, false), piece(word, true), piece(after, false)].filter(
+      (s) => s.text.length > 0,
+    );
+  };
+  return {
+    status: "restyled",
+    left: text,
+    right: text,
+    leftSpans: spans(false),
+    rightSpans: spans(true),
+    leftRuns: [fmtRun(before), fmtRun(word), fmtRun(after)].filter((r) => r.text.length > 0),
+    rightRuns: [fmtRun(before), fmtRun(word, overrides), fmtRun(after)].filter((r) => r.text.length > 0),
+    formatNote,
+  };
+};
+
+const TEXT_COMPARISON = {
+  rows: [
+    same("Q3 Business Review", [fmtRun("Q3 Business Review", { bold: true, sizePt: 20 })]),
+    same("Thank you for your continued partnership this quarter."),
+    same(
+      "Our engineering team shipped four major releases during the quarter, closing out a sustained backlog of customer-requested improvements across the reporting dashboard, the mobile client, and the underlying data pipeline that feeds every downstream integration our partners depend on.",
+    ),
+    same("Overall growth remained steady across every region we track."),
+    changed(
+      "Revenue grew by 12% over the prior period.",
+      "Revenue grew by 18% over the prior period.",
+      "12%",
+      "18%",
+    ),
+    // Document colour on text that didn't change, sitting right beside the
+    // diff's own green/red - the test of whether the two stay visually
+    // distinct (DESIGN.md's "Showing formatting").
+    same("Note: all figures below are preliminary until the books close Friday.", [
+      fmtRun("Note:", { bold: true, color: "C00000" }),
+      fmtRun(" all figures below are preliminary until the books close Friday.", {}),
+    ]),
+    changed(
+      "Status: on track for the January launch.",
+      "Status: delayed for the January launch.",
+      "on track",
+      "delayed",
+      { lineFormat: { color: "2E5AAC" } },
+    ),
+    same("Customer churn held flat at just under two percent."),
+    same(
+      "Support tickets per seat continued trending downward, which the team credits to the onboarding changes shipped last quarter.",
+      [
+        fmtRun("Support tickets per seat continued trending downward, which the team credits to the ", {}),
+        fmtRun("onboarding changes", { italic: true }),
+        fmtRun(" shipped last quarter.", {}),
+      ],
+    ),
+    same("The onboarding team closed out its backlog in record time."),
+    restyled(
+      "Marketing spend tracked within two percent of budget.",
+      {},
+      { font: "Georgia" },
+      "default → Georgia",
+    ),
+    restyledWord(
+      "Provide a short ",
+      "summary",
+      " of the project and lab activities.",
+      { font: "Times New Roman" },
+      "font now Times New Roman",
+    ),
+    same("Every region met its quarterly hiring plan."),
+    same("The platform's uptime held above our internal target."),
+    same("Legal finished its review of the updated vendor contracts."),
+    same("Finance closed the books three days ahead of schedule."),
+    removed("The pilot program with three customers has concluded."),
+    same("Looking ahead, three initiatives define the next quarter."),
+    same("First, the enterprise tier moves out of private beta."),
+    added("We are also launching a new enterprise tier next month."),
+    same("Second, the mobile client gets offline support."),
+    changed(
+      "The team expects a two week rollout window for this change.",
+      "The team expects a one week rollout window for this change.",
+      "two",
+      "one",
+      // The whole run is bold, same as a real bold-emphasised line - not
+      // just the one word, so this actually exercises "a changed word
+      // inside a bold run" rather than making the diff mark look bold.
+      { wordFormat: { bold: true }, lineFormat: { bold: true } },
+    ),
+    same("Third, the reporting dashboard adds a cohort view."),
+    restyled(
+      "None of this changes the roadmap we shared in January.",
+      {},
+      { bold: true },
+      "now bold",
+    ),
+    same("We remain on track for the targets set at the offsite."),
+    same("Thank you again for the trust you've placed in the team."),
+    // A long unchanged tail with no further change after it - the case from
+    // PR #7: these used to show their last two lines as "context" for
+    // nothing, since there's no later change for them to lead into.
+    same("Appendix A: distribution list."),
+    same("Finance - quarterly close owners."),
+    same("Engineering - release leads for the four shipped features."),
+    same("Marketing - campaign owners for the enterprise tier launch."),
+    same("Support - onboarding specialists."),
+    same("Legal - vendor contract reviewers."),
+    same("Prepared by the operations team."),
+    same("Distribution: all department heads."),
+  ],
+  hasText: true,
 };
 
 const RESPONSES = {
@@ -102,7 +356,11 @@ const RESPONSES = {
   set_identity: null,
   set_autostart: null,
   set_milestone: null,
+  clear_milestone: null,
+  set_vault_active: null,
   save_copy: "/Users/eric/Desktop/Chapter 3_rev31.docx",
+  compare_revisions: COMPARE_RESULT,
+  compare_part_text: TEXT_COMPARISON,
   add_vault: null,
   quit_app: null,
 };
@@ -210,6 +468,25 @@ const run = async () => {
       await page.waitForTimeout(200);
       await shoot(page, "timeline-selected");
 
+      // Naming UI on an already-named version: the new "Remove name" button
+      // only shows once a milestone already exists, so this has to start
+      // from the "sent to supervisor" row selected above.
+      await page.getByRole("button", { name: "Name this version" }).click().catch(() => {});
+      await page.waitForTimeout(150);
+      await shoot(page, "naming-existing");
+      await page.getByRole("button", { name: "Cancel" }).click().catch(() => {});
+      await page.waitForTimeout(150);
+
+      // The Folders pane's own actions strip: select a folder, show the new
+      // "Stop watching" action enabled, then exercise it end to end.
+      const foldersPane = page.locator(".panes > section").nth(0);
+      await foldersPane.getByText("Thesis").click().catch(() => {});
+      await page.waitForTimeout(150);
+      await shoot(page, "folders-selected");
+      await foldersPane.getByRole("button", { name: "Stop watching" }).click().catch(() => {});
+      await page.waitForTimeout(200);
+      await shoot(page, "folders-stopped-watching");
+
       // One shot per candidate theme, same data and same selection, so they
       // can be compared without anything else moving.
       for (const variant of ["hardware", "paper", "phosphor"]) {
@@ -227,7 +504,71 @@ const run = async () => {
       await shoot(page, "sparse-light");
       await shoot(page, "sparse-dark", { dark: true });
 
+      // The compare flow: select a version, start the pick, then pick a
+      // second one. Driven on the deck, whose two versions have real
+      // slide/picture-shaped parts so the comparison reads true to life.
+      // Scoped to the timeline pane (the third pane) - its rows reuse time
+      // text ("today HH:MM") that also appears in the Files pane's own rows.
+      const timelinePane = page.locator(".panes > section").nth(2);
       await page.emulateMedia({ colorScheme: "light" });
+      await page.getByText("Defense deck.pptx").first().click().catch(() => {});
+      await page.waitForTimeout(200);
+      await timelinePane
+        .getByRole("button", { name: /first full draft/ })
+        .click()
+        .catch(() => {});
+      await page.waitForTimeout(150);
+      await timelinePane
+        .getByRole("button", { name: "Compare…" })
+        .click()
+        .catch(() => {});
+      await page.waitForTimeout(150);
+      await shoot(page, "compare-picking");
+      await shoot(page, "compare-picking-dark", { dark: true });
+
+      await page.emulateMedia({ colorScheme: "light" });
+      await timelinePane
+        .getByRole("button", { name: /today/ })
+        .first()
+        .click()
+        .catch(() => {});
+      await page.waitForTimeout(250);
+      await shoot(page, "compare");
+      await shoot(page, "compare-dark", { dark: true });
+
+      // The text-compare flow: click a changed slide's name to open the
+      // full-screen side-by-side view. It takes over the whole window, so
+      // these shots are full width rather than scoped to the timeline pane.
+      await timelinePane
+        .getByRole("button", { name: "Slide 4" })
+        .click()
+        .catch(() => {});
+      await page.waitForTimeout(250);
+      await shoot(page, "compare-text");
+      await shoot(page, "compare-text-dark", { dark: true });
+
+      // prev/next should jump straight to a changed line and scroll it into
+      // view. A short viewport forces that to matter - the whole comparison
+      // fits in a tall window with nothing to scroll.
+      await page.emulateMedia({ colorScheme: "light" });
+      await page.setViewportSize({ width: 1100, height: 420 });
+      await page.waitForTimeout(100);
+      await page.getByRole("button", { name: "Next change" }).click();
+      await page.waitForTimeout(150);
+      await page.getByRole("button", { name: "Next change" }).click();
+      await page.waitForTimeout(400);
+      await page.screenshot({ path: `${OUT}/compare-text-navigated.png` });
+      console.log(`${OUT}/compare-text-navigated.png`);
+
+      await shoot(page, "compare-text-narrow", { width: 700, height: 900 });
+
+      // Done should hand back exactly the screen left behind: same file,
+      // same selection, the changed-parts list still open underneath.
+      await page.setViewportSize({ width: 1100, height: 760 });
+      await page.getByRole("button", { name: "Done" }).click();
+      await page.waitForTimeout(150);
+      await shoot(page, "compare-after-done");
+
       await page.getByRole("button", { name: /settings/i }).click();
       await page.waitForTimeout(300);
       await shoot(page, "settings");

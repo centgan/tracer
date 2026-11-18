@@ -3,10 +3,19 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import * as api from "$lib/api";
-  import type { FileStats, FileWithLastChanged, Loadable, Revision, Vault } from "$lib/types";
+  import type {
+    CompareResult,
+    FileStats,
+    FileWithLastChanged,
+    Loadable,
+    Revision,
+    TextComparison,
+    Vault,
+  } from "$lib/types";
   import FoldersPane from "$lib/FoldersPane.svelte";
   import FilesPane from "$lib/FilesPane.svelte";
   import TimelinePane from "$lib/TimelinePane.svelte";
+  import CompareView from "$lib/CompareView.svelte";
   import StatusBar from "$lib/StatusBar.svelte";
   import SettingsDialog from "$lib/SettingsDialog.svelte";
 
@@ -31,6 +40,17 @@
 
   let justArrivedId = $state<number | null>(null);
 
+  // The full-screen text comparison. `null` means the three panes own the
+  // window; set, it takes over instead. The panes stay mounted underneath
+  // (just hidden) rather than being torn down, so Escape/Done hands back the
+  // exact same file, selection and timeline scroll position, per DESIGN.md.
+  let compareTarget = $state<{
+    olderId: number;
+    newerId: number;
+    entryName: string;
+    partLabel: string;
+  } | null>(null);
+
   let selectedVault = $derived(
     vaults.status === "loaded" ? (vaults.data.find((v) => v.id === selectedVaultId) ?? null) : null,
   );
@@ -42,6 +62,13 @@
   let watchedCount = $derived(
     vaults.status === "loaded" ? vaults.data.filter((v) => v.hasTracerFolder).length : null,
   );
+  function findRevision(id: number) {
+    return revisions && revisions.status === "loaded"
+      ? (revisions.data.find((r) => r.id === id) ?? null)
+      : null;
+  }
+  let compareOlder = $derived(compareTarget ? findRevision(compareTarget.olderId) : null);
+  let compareNewer = $derived(compareTarget ? findRevision(compareTarget.newerId) : null);
 
   async function loadVaults() {
     vaults = { status: "loading" };
@@ -50,6 +77,11 @@
     } catch (e) {
       vaults = { status: "error", message: errorMessage(e) };
     }
+  }
+
+  async function handleToggleActive(vault: Vault, active: boolean): Promise<void> {
+    await api.setVaultActive(vault.id, active);
+    await loadVaults();
   }
 
   // Tracked files carry no timestamp of their own, so "last changed" comes
@@ -148,8 +180,29 @@
     await refreshTimeline();
   }
 
+  async function handleClearMilestone(revisionId: number): Promise<void> {
+    await api.clearMilestone(revisionId);
+    await refreshTimeline();
+  }
+
   async function handleSaveCopy(revisionId: number): Promise<string> {
     return api.saveCopy(revisionId);
+  }
+
+  async function handleCompare(olderId: number, newerId: number): Promise<CompareResult> {
+    return api.compareRevisions(olderId, newerId);
+  }
+
+  async function handleComparePartText(
+    olderId: number,
+    newerId: number,
+    entryName: string,
+  ): Promise<TextComparison> {
+    return api.comparePartText(olderId, newerId, entryName);
+  }
+
+  function handleOpenCompare(olderId: number, newerId: number, entryName: string, partLabel: string) {
+    compareTarget = { olderId, newerId, entryName, partLabel };
   }
 
   loadVaults();
@@ -186,9 +239,14 @@
     <span class="title-bar-text">Tracer</span>
   </div>
 
-  <StatusBar {watchedCount} onOpenSettings={() => (settingsOpen = true)} />
+  {#if !compareTarget}
+    <StatusBar {watchedCount} onOpenSettings={() => (settingsOpen = true)} />
+  {/if}
 
-  <div class="panes">
+  <!-- Kept mounted (just hidden) while a comparison is open, rather than
+       destroyed - that's what lets Escape/Done hand back the exact file,
+       selection and scroll position the user left, per DESIGN.md. -->
+  <div class="panes" class:hidden={!!compareTarget}>
     <FoldersPane
       {vaults}
       {selectedVaultId}
@@ -197,6 +255,7 @@
       onSelect={selectVault}
       onAddFolder={handleAddFolder}
       onRetry={loadVaults}
+      onToggleActive={handleToggleActive}
     />
     <FilesPane {selectedVault} {files} {selectedFileId} onSelect={selectFile} />
     <TimelinePane
@@ -205,13 +264,30 @@
       {fileStats}
       {justArrivedId}
       onSetMilestone={handleSetMilestone}
+      onClearMilestone={handleClearMilestone}
       onSaveCopy={handleSaveCopy}
+      onCompare={handleCompare}
+      onOpenCompare={handleOpenCompare}
     />
   </div>
 
-  <footer class="app-footer">
-    Tracer versions files, not the folder. Lose the folder and its history goes too.
-  </footer>
+  {#if compareTarget && compareOlder && compareNewer}
+    <CompareView
+      older={compareOlder}
+      newer={compareNewer}
+      fileName={selectedFile?.relativePath ?? ""}
+      partLabel={compareTarget.partLabel}
+      onLoad={() =>
+        handleComparePartText(compareTarget!.olderId, compareTarget!.newerId, compareTarget!.entryName)}
+      onDone={() => (compareTarget = null)}
+    />
+  {/if}
+
+  {#if !compareTarget}
+    <footer class="app-footer">
+      Tracer versions files, not the folder. Lose the folder and its history goes too.
+    </footer>
+  {/if}
 </main>
 
 <SettingsDialog open={settingsOpen} onClose={() => (settingsOpen = false)} {watchedCount} />
@@ -254,6 +330,10 @@
 
   .panes > :global(section) {
     min-height: 0;
+  }
+
+  .panes.hidden {
+    display: none;
   }
 
   .app-footer {

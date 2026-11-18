@@ -151,6 +151,31 @@ fn add_vault(path: String, state: State<'_, AppState>) -> Result<db::Vault, Stri
     Ok(vault)
 }
 
+/// Stops or resumes watching a folder in place - its history stays exactly
+/// where it is either way. The DB flip alone is enough for correctness
+/// (`find_vault_for_path` already filters on `is_active`); the watcher
+/// add/remove calls are best-effort so a transient failure there can't block
+/// the toggle the user actually asked for.
+#[tauri::command]
+fn set_vault_active(vault_id: i64, active: bool, state: State<'_, AppState>) -> Result<(), String> {
+    let conn = lock(&state)?;
+    let vaults = db::list_vaults(&conn).map_err(to_err)?;
+    let vault = vaults.into_iter().find(|v| v.id == vault_id);
+    let Some(v) = vault else {
+        return Err("That folder no longer exists.".to_string());
+    };
+    db::set_vault_active(&conn, vault_id, active).map_err(to_err)?;
+    let root_path = v.root_path.clone();
+    drop(conn);
+    let path = PathBuf::from(root_path);
+    if active {
+        let _ = state.watch.add_path(&path);
+    } else {
+        let _ = state.watch.remove_path(&path);
+    }
+    refresh_watch_status(&state)
+}
+
 /// Exits the process outright. Bound to the tray's "Quit Tracer" item, the
 /// frontend's own Quit button, and (by the platform default we don't
 /// override) Cmd+Q - quitting must actually stop the watcher, not hide it.
@@ -183,6 +208,58 @@ fn list_tracked_files(
 ) -> Result<Vec<db::TrackedFile>, String> {
     let conn = lock(&state)?;
     db::list_tracked_files(&conn, vault_id).map_err(to_err)
+}
+
+/// Lists which parts of a file differ between two versions.
+///
+/// Cheap by construction: both versions already carry a hash per part, so this
+/// is a set comparison rather than a diff of any file contents.
+#[tauri::command]
+fn compare_revisions(
+    older_id: i64,
+    newer_id: i64,
+    state: State<'_, AppState>,
+) -> Result<db::Comparison, String> {
+    let conn = lock(&state)?;
+    db::compare_revisions(&conn, older_id, newer_id).map_err(to_err)
+}
+
+/// Pulls one part's text out of two versions and word-diffs it, for the
+/// side-by-side view a user gets by clicking a changed part in `compare_revisions`'
+/// results.
+///
+/// A part absent from a version (added/removed) yields no text on that side
+/// rather than an error - `engine::diff_text` renders that as every line
+/// added or removed, same as a part that genuinely has no recognised text.
+#[tauri::command]
+fn compare_part_text(
+    older_id: i64,
+    newer_id: i64,
+    entry_name: String,
+    state: State<'_, AppState>,
+) -> Result<engine::TextComparison, String> {
+    let part_text = |revision_id: i64| -> Result<Vec<engine::Paragraph>, String> {
+        let part = {
+            let conn = lock(&state)?;
+            db::get_revision_parts(&conn, revision_id)
+                .map_err(to_err)?
+                .into_iter()
+                .find(|p| p.entry_name == entry_name)
+        };
+        match part {
+            None => Ok(Vec::new()),
+            Some(part) => {
+                let bytes = engine::load_object(&state.objects_root, &part.object_hash)
+                    .map_err(to_err)?;
+                Ok(engine::extract_text(&entry_name, &bytes))
+            }
+        }
+    };
+
+    let older_text = part_text(older_id)?;
+    let newer_text = part_text(newer_id)?;
+
+    Ok(engine::diff_text(&older_text, &newer_text))
 }
 
 /// Backs the line that makes the point of the whole app visible: how much
@@ -223,6 +300,12 @@ fn set_milestone(
 ) -> Result<(), String> {
     let conn = lock(&state)?;
     db::set_milestone(&conn, revision_id, &label).map_err(to_err)
+}
+
+#[tauri::command]
+fn clear_milestone(revision_id: i64, state: State<'_, AppState>) -> Result<(), String> {
+    let conn = lock(&state)?;
+    db::clear_milestone(&conn, revision_id).map_err(to_err)
 }
 
 /// Rebuild a historical revision and drop a copy of it on the Desktop.
@@ -378,10 +461,14 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             list_vaults,
             add_vault,
+            set_vault_active,
             list_tracked_files,
             get_timeline,
             get_file_stats,
+            compare_revisions,
+            compare_part_text,
             set_milestone,
+            clear_milestone,
             save_copy,
             quit_app,
             is_autostart_enabled,

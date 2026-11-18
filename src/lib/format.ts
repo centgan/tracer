@@ -11,7 +11,7 @@ export function formatBytes(bytes: number): string {
   return `${gb.toFixed(1)} GB`;
 }
 
-import type { FileStats } from "./types";
+import type { FileStats, Revision } from "./types";
 
 // The quiet stats line near the timeline header. Never claims a saving that
 // isn't real: a brand-new file has storedBytes >= logicalBytes (one version,
@@ -55,6 +55,20 @@ export function formatRelativeTime(unixSeconds: number): string {
   const time = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   const { text, withTime } = dayLabel(date, new Date());
   return withTime ? `${text} ${time}` : text;
+}
+
+// Just the day, no clock time - the quiet line under a compare column header
+// ("Sep 2", "today"), printed alongside the author rather than a full
+// timestamp that would repeat what the header line above already said.
+export function formatDateOnly(unixSeconds: number): string {
+  return dayLabel(new Date(unixSeconds * 1000), new Date()).text;
+}
+
+// What labels a version wherever one is named: its name when it has one,
+// else its time. Shared by the timeline row and the compare views so a
+// version is never called two different things on two screens.
+export function versionLabel(revision: Revision): string {
+  return revision.milestone ?? formatRelativeTime(revision.timestamp);
 }
 
 // A work session's time span, e.g. "today 14:02 – 16:40". Labeled by the

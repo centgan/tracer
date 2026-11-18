@@ -1,9 +1,10 @@
 <script lang="ts">
-  import type { FileStats, FileWithLastChanged, Loadable, Revision } from "./types";
+  import type { CompareResult, FileStats, FileWithLastChanged, Loadable, Revision } from "./types";
   import TimelineRow from "./TimelineRow.svelte";
   import { groupIntoSessions } from "./sessions";
   import { findGaps, sessionTickCount } from "./spine";
-  import { formatFileStats, formatSessionSpan } from "./format";
+  import { formatFileStats, formatSessionSpan, versionLabel } from "./format";
+  import { summarizeChanges, supportsTextCompare } from "./partnames";
 
   let {
     selectedFile,
@@ -11,14 +12,20 @@
     fileStats,
     justArrivedId,
     onSetMilestone,
+    onClearMilestone,
     onSaveCopy,
+    onCompare,
+    onOpenCompare,
   }: {
     selectedFile: FileWithLastChanged | null;
     revisions: Loadable<Revision[]> | null;
     fileStats: Loadable<FileStats> | null;
     justArrivedId: number | null;
     onSetMilestone: (revisionId: number, label: string) => Promise<void>;
+    onClearMilestone: (revisionId: number) => Promise<void>;
     onSaveCopy: (revisionId: number) => Promise<string>;
+    onCompare: (olderId: number, newerId: number) => Promise<CompareResult>;
+    onOpenCompare: (olderId: number, newerId: number, entryName: string, partLabel: string) => void;
   } = $props();
 
   let groups = $derived(
@@ -71,6 +78,27 @@
   let copyPath = $state<string | null>(null);
   let copyError = $state<string | null>(null);
 
+  // The pane's compare flow: picking a second version, then showing the
+  // changed-parts list. "list" is the ordinary timeline every other piece of
+  // state above already assumes. The side-by-side text view itself isn't a
+  // mode here - it takes over the whole window, so it's owned by whoever
+  // renders this pane (see onOpenCompare) and this pane's own mode just
+  // waits underneath, unchanged, until the user comes back to it.
+  type PaneMode =
+    | { kind: "list" }
+    | { kind: "picking"; firstId: number }
+    | { kind: "comparing"; olderId: number; newerId: number };
+
+  let mode = $state<PaneMode>({ kind: "list" });
+  let pickError = $state<string | null>(null);
+  let compareResult = $state<Loadable<CompareResult> | null>(null);
+
+  function findRevision(id: number): Revision | undefined {
+    return revisions && revisions.status === "loaded"
+      ? revisions.data.find((r) => r.id === id)
+      : undefined;
+  }
+
   // Switching files should drop the old selection - it's not even in the new
   // list. Tracked by id, not the `selectedFile` object itself, so a file-list
   // refresh (new objects, same id) doesn't blow away the user's selection.
@@ -84,7 +112,21 @@
       namingError = null;
       copyPath = null;
       copyError = null;
+      mode = { kind: "list" };
+      pickError = null;
+      compareResult = null;
     }
+  });
+
+  // Escape cancels picking from anywhere in the pane, not just a focused
+  // input - the picking state has no input to attach a keydown to.
+  $effect(() => {
+    if (mode.kind !== "picking") return;
+    function onKeydown(e: KeyboardEvent) {
+      if (e.key === "Escape") cancelPicking();
+    }
+    window.addEventListener("keydown", onKeydown);
+    return () => window.removeEventListener("keydown", onKeydown);
   });
 
   function selectRevision(id: number) {
@@ -93,6 +135,63 @@
     namingError = null;
     copyPath = null;
     copyError = null;
+  }
+
+  // Routes a row click: normally it selects, but mid-pick it finishes (or
+  // rejects) the comparison instead.
+  function handleRowClick(id: number) {
+    if (mode.kind !== "picking") {
+      selectRevision(id);
+      return;
+    }
+    if (id === mode.firstId) {
+      pickError = "That's the same version. Pick a different one to compare with.";
+      return;
+    }
+    startCompare(mode.firstId, id);
+  }
+
+  function startPicking() {
+    if (!selectedRevision) return;
+    mode = { kind: "picking", firstId: selectedRevision.id };
+    pickError = null;
+  }
+
+  function cancelPicking() {
+    mode = { kind: "list" };
+    pickError = null;
+  }
+
+  function backToList() {
+    mode = { kind: "list" };
+    compareResult = null;
+  }
+
+  // Opens the side-by-side text view for one changed part. Only reachable
+  // from "comparing", so the two version ids it needs are already in hand.
+  // The view itself is owned by whoever rendered this pane - it replaces the
+  // whole window, not just this pane - so this only hands off the ids.
+  function openPartText(entryName: string, label: string) {
+    if (mode.kind !== "comparing") return;
+    onOpenCompare(mode.olderId, mode.newerId, entryName, label);
+  }
+
+  async function startCompare(aId: number, bId: number) {
+    const a = findRevision(aId);
+    const b = findRevision(bId);
+    if (!a || !b) return;
+    const [olderId, newerId] = a.timestamp <= b.timestamp ? [a.id, b.id] : [b.id, a.id];
+    pickError = null;
+    mode = { kind: "comparing", olderId, newerId };
+    compareResult = { status: "loading" };
+    try {
+      compareResult = { status: "loaded", data: await onCompare(olderId, newerId) };
+    } catch (e) {
+      compareResult = {
+        status: "error",
+        message: e instanceof Error ? e.message : "Couldn't compare these versions.",
+      };
+    }
   }
 
   function startNaming() {
@@ -112,6 +211,20 @@
   // triggered by our own click handler doesn't have that problem.
   function focusOnMount(node: HTMLElement) {
     node.focus();
+  }
+
+  async function removeMilestone() {
+    if (!selectedRevision) return;
+    namingBusy = true;
+    namingError = null;
+    try {
+      await onClearMilestone(selectedRevision.id);
+      naming = false;
+    } catch (e) {
+      namingError = e instanceof Error ? e.message : "Couldn't remove that name.";
+    } finally {
+      namingBusy = false;
+    }
   }
 
   async function confirmNaming() {
@@ -151,13 +264,108 @@
 <section class="pane">
   <div class="pane-header">
     <h2>{selectedFile ? selectedFile.relativePath : "Timeline"}</h2>
-    {#if fileStats?.status === "loaded" && revisions?.status === "loaded" && revisions.data.length > 0}
+    {#if mode.kind === "list" && fileStats?.status === "loaded" && revisions?.status === "loaded" && revisions.data.length > 0}
       <p class="stats-line">{formatFileStats(fileStats.data)}</p>
     {/if}
   </div>
 
+  {#if mode.kind === "picking"}
+    <p class="hint pad pick-hint">
+      Pick another version to compare with.
+      {#if pickError}<span class="error-text">{pickError}</span>{/if}
+    </p>
+  {/if}
+
   <div class="well">
-    {#if !selectedFile || !revisions}
+    {#if mode.kind === "comparing"}
+      {@const older = findRevision(mode.olderId)}
+      {@const newer = findRevision(mode.newerId)}
+      <div class="compare pad">
+        <p class="compare-heading">
+          Comparing {older ? versionLabel(older) : "one version"} to {newer
+            ? versionLabel(newer)
+            : "another version"}
+        </p>
+        {#if compareResult?.status === "loading"}
+          <p class="hint">Comparing…</p>
+        {:else if compareResult?.status === "error"}
+          <p class="error-text">{compareResult.message}</p>
+        {:else if compareResult?.status === "loaded"}
+          {@const summary = summarizeChanges(compareResult.data.changes)}
+          {@const nothingNamed =
+            summary.changed.length === 0 && summary.added.length === 0 && summary.removed.length === 0}
+          {#if nothingNamed}
+            <p class="hint">
+              Nothing meaningful changed between these versions - only internal bookkeeping
+              differs.
+            </p>
+          {:else}
+            {#if summary.changed.length > 0}
+              <div class="change-group">
+                <h3>Changed</h3>
+                <ul>
+                  {#each summary.changed as item}
+                    <li>
+                      {#if supportsTextCompare(item.entryName)}
+                        <button class="plain part-link" onclick={() => openPartText(item.entryName, item.label)}>
+                          {item.label}
+                        </button>
+                      {:else}
+                        {item.label}
+                      {/if}
+                    </li>
+                  {/each}
+                </ul>
+              </div>
+            {/if}
+            {#if summary.added.length > 0}
+              <div class="change-group">
+                <h3>Added</h3>
+                <ul>
+                  {#each summary.added as item}
+                    <li>
+                      {#if supportsTextCompare(item.entryName)}
+                        <button class="plain part-link" onclick={() => openPartText(item.entryName, item.label)}>
+                          {item.label}
+                        </button>
+                      {:else}
+                        {item.label}
+                      {/if}
+                    </li>
+                  {/each}
+                </ul>
+              </div>
+            {/if}
+            {#if summary.removed.length > 0}
+              <div class="change-group">
+                <h3>Removed</h3>
+                <ul>
+                  {#each summary.removed as item}
+                    <li>
+                      {#if supportsTextCompare(item.entryName)}
+                        <button class="plain part-link" onclick={() => openPartText(item.entryName, item.label)}>
+                          {item.label}
+                        </button>
+                      {:else}
+                        {item.label}
+                      {/if}
+                    </li>
+                  {/each}
+                </ul>
+              </div>
+            {/if}
+          {/if}
+          <p class="hint compare-footer">
+            {compareResult.data.unchangedCount} part{compareResult.data.unchangedCount === 1
+              ? ""
+              : "s"} unchanged
+            {#if summary.internalCount > 0}
+              · {summary.internalCount} internal change{summary.internalCount === 1 ? "" : "s"} hidden
+            {/if}
+          </p>
+        {/if}
+      </div>
+    {:else if !selectedFile || !revisions}
       <p class="hint pad">Pick a file in the middle column to see its versions.</p>
     {:else if revisions.status === "loading"}
       <p class="hint pad">Loading versions…</p>
@@ -173,7 +381,7 @@
               revision={group.revisions[0]}
               selected={group.revisions[0].id === selectedId}
               justArrived={group.revisions[0].id === justArrivedId}
-              onSelect={selectRevision}
+              onSelect={handleRowClick}
             />
           {:else}
             <li class="session">
@@ -213,7 +421,7 @@
                       {revision}
                       selected={revision.id === selectedId}
                       justArrived={revision.id === justArrivedId}
-                      onSelect={selectRevision}
+                      onSelect={handleRowClick}
                     />
                   {/each}
                 </ul>
@@ -234,7 +442,11 @@
   </div>
 
   <div class="actions">
-    {#if naming}
+    {#if mode.kind === "comparing"}
+      <button onclick={backToList}>Back to versions</button>
+    {:else if mode.kind === "picking"}
+      <button class="plain" onclick={cancelPicking}>Cancel</button>
+    {:else if naming}
       <input
         use:focusOnMount
         bind:value={labelDraft}
@@ -247,11 +459,15 @@
       />
       <button onclick={confirmNaming} disabled={namingBusy}>Save</button>
       <button class="plain" onclick={cancelNaming} disabled={namingBusy}>Cancel</button>
+      {#if selectedRevision?.milestone}
+        <button class="plain" onclick={removeMilestone} disabled={namingBusy}>Remove name</button>
+      {/if}
     {:else}
       <button onclick={startNaming} disabled={!selectedRevision}>Name this version</button>
       <button onclick={handleSaveCopy} disabled={!selectedRevision || copyBusy}>
         {copyBusy ? "Saving…" : "Save a copy"}
       </button>
+      <button onclick={startPicking} disabled={!selectedRevision}>Compare…</button>
     {/if}
   </div>
   {#if namingError}<p class="error-text pad">{namingError}</p>{/if}
@@ -287,6 +503,55 @@
 
   .pad {
     padding: 8px;
+  }
+
+  .pick-hint {
+    flex: none;
+    font-weight: bold;
+  }
+
+  .pick-hint .error-text {
+    display: block;
+    font-weight: normal;
+    margin-top: 2px;
+  }
+
+  .compare-heading {
+    font-size: 13px;
+    font-weight: bold;
+    margin-bottom: 10px;
+  }
+
+  .change-group {
+    margin-bottom: 10px;
+  }
+
+  .change-group h3 {
+    font-size: 11px;
+    font-weight: bold;
+    margin-bottom: 2px;
+  }
+
+  .change-group ul {
+    margin: 0;
+    padding-left: 1.4em;
+  }
+
+  .change-group li {
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  .compare-footer {
+    margin-top: 6px;
+  }
+
+  /* A changed/added/removed part that has text to show - styled as a link so
+     it reads as clickable without a full button bevel in a list of names. */
+  .part-link {
+    font-size: 13px;
+    text-decoration: underline;
+    color: var(--ink);
   }
 
   .well {

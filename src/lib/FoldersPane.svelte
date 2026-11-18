@@ -9,6 +9,7 @@
     onSelect,
     onAddFolder,
     onRetry,
+    onToggleActive,
   }: {
     vaults: Loadable<Vault[]>;
     selectedVaultId: number | null;
@@ -17,7 +18,35 @@
     onSelect: (id: number) => void;
     onAddFolder: () => void;
     onRetry: () => void;
+    onToggleActive: (vault: Vault, active: boolean) => Promise<void>;
   } = $props();
+
+  let selectedVault = $derived(
+    vaults.status === "loaded" ? (vaults.data.find((v) => v.id === selectedVaultId) ?? null) : null,
+  );
+
+  let toggleBusy = $state(false);
+  let toggleError = $state<string | null>(null);
+  let toggleMessage = $state<string | null>(null);
+
+  async function handleToggleActive() {
+    if (!selectedVault) return;
+    const vault = selectedVault;
+    toggleBusy = true;
+    toggleError = null;
+    toggleMessage = null;
+    try {
+      const nextActive = !vault.isActive;
+      await onToggleActive(vault, nextActive);
+      toggleMessage = nextActive
+        ? "Resumed watching. New saves will be tracked again."
+        : "Stopped watching. Past versions are kept; new saves won't be recorded until you resume.";
+    } catch (e) {
+      toggleError = e instanceof Error ? e.message : "Couldn't change that.";
+    } finally {
+      toggleBusy = false;
+    }
+  }
 
   // The root path is useful as a tooltip, but the last segment is what a
   // person actually recognizes.
@@ -26,6 +55,9 @@
   }
 
   function watchTitle(vault: Vault): string {
+    if (!vault.isActive) {
+      return `${vault.rootPath} — not watching. Select it and choose "Resume watching" to start again.`;
+    }
     return vault.hasTracerFolder
       ? vault.rootPath
       : `${vault.rootPath} — its .tracer folder was removed, so Tracer stopped watching it.`;
@@ -43,8 +75,6 @@
   {#if addVaultError}
     <p class="error-text">{addVaultError}</p>
   {/if}
-
-  <p class="hint">Delete a folder's .tracer folder to stop watching it.</p>
 
   <div class="well">
     {#if vaults.status === "loading"}
@@ -77,9 +107,9 @@
                 </svg>
                 <span class="name">{folderName(vault.rootPath)}</span>
               </span>
-              <span class="state" class:unwatched={!vault.hasTracerFolder}>
+              <span class="state" class:unwatched={!vault.hasTracerFolder || !vault.isActive}>
                 <span class="dot" aria-hidden="true">●</span>
-                {vault.hasTracerFolder ? "Watching" : "Not watched"}
+                {!(vault.hasTracerFolder && vault.isActive) ? "Not watched" : "Watching"}
               </span>
             </button>
           </li>
@@ -87,6 +117,14 @@
       </ul>
     {/if}
   </div>
+
+  <div class="actions">
+    <button onclick={handleToggleActive} disabled={!selectedVault || toggleBusy}>
+      {toggleBusy ? "Working…" : selectedVault?.isActive === false ? "Resume watching" : "Stop watching"}
+    </button>
+  </div>
+  {#if toggleError}<p class="error-text pad">{toggleError}</p>{/if}
+  {#if toggleMessage}<p class="hint pad">{toggleMessage}</p>{/if}
 </section>
 
 <style>
@@ -192,5 +230,14 @@
   .row.selected .state,
   .row.selected .state.unwatched {
     color: #fff;
+  }
+
+  .actions {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-top: 2px;
+    border-top: 1px solid var(--edge);
   }
 </style>

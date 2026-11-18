@@ -50,6 +50,15 @@ impl WatchHandle {
             .with_context(|| format!("watching {}", path.display()))?;
         Ok(())
     }
+
+    pub fn remove_path(&self, path: &Path) -> anyhow::Result<()> {
+        self.debouncer
+            .lock()
+            .map_err(|_| anyhow::anyhow!("watcher lock poisoned by an earlier panic"))?
+            .unwatch(path)
+            .with_context(|| format!("unwatching {}", path.display()))?;
+        Ok(())
+    }
 }
 
 fn is_trackable(path: &Path) -> bool {

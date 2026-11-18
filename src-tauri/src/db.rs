@@ -229,8 +229,6 @@ pub fn list_vaults(conn: &Connection) -> Result<Vec<Vault>> {
 }
 
 /// Stops or resumes watching a folder without forgetting its history.
-// Called by the Folders screen, which doesn't exist yet.
-#[allow(dead_code)]
 pub fn set_vault_active(conn: &Connection, vault_id: i64, active: bool) -> Result<()> {
     conn.execute(
         "UPDATE vaults SET is_active = ?1 WHERE id = ?2",
@@ -591,6 +589,13 @@ pub fn set_milestone(conn: &Connection, revision_id: i64, label: &str) -> Result
     Ok(())
 }
 
+/// Removes a revision's milestone entirely, so it goes back to being an
+/// unnamed version rather than one with an empty label.
+pub fn clear_milestone(conn: &Connection, revision_id: i64) -> Result<()> {
+    conn.execute("DELETE FROM milestones WHERE revision_id = ?1", params![revision_id])?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -866,6 +871,10 @@ mod tests {
         set_milestone(&conn, revision_id, "v1.0").unwrap();
         let timeline = get_timeline(&conn, file_id).unwrap();
         assert_eq!(timeline[0].milestone, Some("v1.0".to_string()));
+
+        clear_milestone(&conn, revision_id).unwrap();
+        let timeline = get_timeline(&conn, file_id).unwrap();
+        assert_eq!(timeline[0].milestone, None);
     }
 
     #[test]

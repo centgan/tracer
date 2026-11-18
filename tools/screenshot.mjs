@@ -356,6 +356,8 @@ const RESPONSES = {
   set_identity: null,
   set_autostart: null,
   set_milestone: null,
+  clear_milestone: null,
+  set_vault_active: null,
   save_copy: "/Users/eric/Desktop/Chapter 3_rev31.docx",
   compare_revisions: COMPARE_RESULT,
   compare_part_text: TEXT_COMPARISON,
@@ -465,6 +467,25 @@ const run = async () => {
         .catch(() => {});
       await page.waitForTimeout(200);
       await shoot(page, "timeline-selected");
+
+      // Naming UI on an already-named version: the new "Remove name" button
+      // only shows once a milestone already exists, so this has to start
+      // from the "sent to supervisor" row selected above.
+      await page.getByRole("button", { name: "Name this version" }).click().catch(() => {});
+      await page.waitForTimeout(150);
+      await shoot(page, "naming-existing");
+      await page.getByRole("button", { name: "Cancel" }).click().catch(() => {});
+      await page.waitForTimeout(150);
+
+      // The Folders pane's own actions strip: select a folder, show the new
+      // "Stop watching" action enabled, then exercise it end to end.
+      const foldersPane = page.locator(".panes > section").nth(0);
+      await foldersPane.getByText("Thesis").click().catch(() => {});
+      await page.waitForTimeout(150);
+      await shoot(page, "folders-selected");
+      await foldersPane.getByRole("button", { name: "Stop watching" }).click().catch(() => {});
+      await page.waitForTimeout(200);
+      await shoot(page, "folders-stopped-watching");
 
       // One shot per candidate theme, same data and same selection, so they
       // can be compared without anything else moving.

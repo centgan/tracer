@@ -12,6 +12,7 @@
     fileStats,
     justArrivedId,
     onSetMilestone,
+    onClearMilestone,
     onSaveCopy,
     onCompare,
     onOpenCompare,
@@ -21,6 +22,7 @@
     fileStats: Loadable<FileStats> | null;
     justArrivedId: number | null;
     onSetMilestone: (revisionId: number, label: string) => Promise<void>;
+    onClearMilestone: (revisionId: number) => Promise<void>;
     onSaveCopy: (revisionId: number) => Promise<string>;
     onCompare: (olderId: number, newerId: number) => Promise<CompareResult>;
     onOpenCompare: (olderId: number, newerId: number, entryName: string, partLabel: string) => void;
@@ -209,6 +211,20 @@
   // triggered by our own click handler doesn't have that problem.
   function focusOnMount(node: HTMLElement) {
     node.focus();
+  }
+
+  async function removeMilestone() {
+    if (!selectedRevision) return;
+    namingBusy = true;
+    namingError = null;
+    try {
+      await onClearMilestone(selectedRevision.id);
+      naming = false;
+    } catch (e) {
+      namingError = e instanceof Error ? e.message : "Couldn't remove that name.";
+    } finally {
+      namingBusy = false;
+    }
   }
 
   async function confirmNaming() {
@@ -443,6 +459,9 @@
       />
       <button onclick={confirmNaming} disabled={namingBusy}>Save</button>
       <button class="plain" onclick={cancelNaming} disabled={namingBusy}>Cancel</button>
+      {#if selectedRevision?.milestone}
+        <button class="plain" onclick={removeMilestone} disabled={namingBusy}>Remove name</button>
+      {/if}
     {:else}
       <button onclick={startNaming} disabled={!selectedRevision}>Name this version</button>
       <button onclick={handleSaveCopy} disabled={!selectedRevision || copyBusy}>

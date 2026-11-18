@@ -151,6 +151,31 @@ fn add_vault(path: String, state: State<'_, AppState>) -> Result<db::Vault, Stri
     Ok(vault)
 }
 
+/// Stops or resumes watching a folder in place - its history stays exactly
+/// where it is either way. The DB flip alone is enough for correctness
+/// (`find_vault_for_path` already filters on `is_active`); the watcher
+/// add/remove calls are best-effort so a transient failure there can't block
+/// the toggle the user actually asked for.
+#[tauri::command]
+fn set_vault_active(vault_id: i64, active: bool, state: State<'_, AppState>) -> Result<(), String> {
+    let conn = lock(&state)?;
+    let vaults = db::list_vaults(&conn).map_err(to_err)?;
+    let vault = vaults.into_iter().find(|v| v.id == vault_id);
+    let Some(v) = vault else {
+        return Err("That folder no longer exists.".to_string());
+    };
+    db::set_vault_active(&conn, vault_id, active).map_err(to_err)?;
+    let root_path = v.root_path.clone();
+    drop(conn);
+    let path = PathBuf::from(root_path);
+    if active {
+        let _ = state.watch.add_path(&path);
+    } else {
+        let _ = state.watch.remove_path(&path);
+    }
+    refresh_watch_status(&state)
+}
+
 /// Exits the process outright. Bound to the tray's "Quit Tracer" item, the
 /// frontend's own Quit button, and (by the platform default we don't
 /// override) Cmd+Q - quitting must actually stop the watcher, not hide it.
@@ -275,6 +300,12 @@ fn set_milestone(
 ) -> Result<(), String> {
     let conn = lock(&state)?;
     db::set_milestone(&conn, revision_id, &label).map_err(to_err)
+}
+
+#[tauri::command]
+fn clear_milestone(revision_id: i64, state: State<'_, AppState>) -> Result<(), String> {
+    let conn = lock(&state)?;
+    db::clear_milestone(&conn, revision_id).map_err(to_err)
 }
 
 /// Rebuild a historical revision and drop a copy of it on the Desktop.
@@ -430,12 +461,14 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             list_vaults,
             add_vault,
+            set_vault_active,
             list_tracked_files,
             get_timeline,
             get_file_stats,
             compare_revisions,
             compare_part_text,
             set_milestone,
+            clear_milestone,
             save_copy,
             quit_app,
             is_autostart_enabled,

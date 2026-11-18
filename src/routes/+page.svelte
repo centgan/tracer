@@ -79,6 +79,11 @@
     }
   }
 
+  async function handleToggleActive(vault: Vault, active: boolean): Promise<void> {
+    await api.setVaultActive(vault.id, active);
+    await loadVaults();
+  }
+
   // Tracked files carry no timestamp of their own, so "last changed" comes
   // from the newest entry in each file's timeline (already sorted newest-first).
   async function loadFilesEnriched(vaultId: number): Promise<FileWithLastChanged[]> {
@@ -175,6 +180,11 @@
     await refreshTimeline();
   }
 
+  async function handleClearMilestone(revisionId: number): Promise<void> {
+    await api.clearMilestone(revisionId);
+    await refreshTimeline();
+  }
+
   async function handleSaveCopy(revisionId: number): Promise<string> {
     return api.saveCopy(revisionId);
   }
@@ -245,6 +255,7 @@
       onSelect={selectVault}
       onAddFolder={handleAddFolder}
       onRetry={loadVaults}
+      onToggleActive={handleToggleActive}
     />
     <FilesPane {selectedVault} {files} {selectedFileId} onSelect={selectFile} />
     <TimelinePane
@@ -253,6 +264,7 @@
       {fileStats}
       {justArrivedId}
       onSetMilestone={handleSetMilestone}
+      onClearMilestone={handleClearMilestone}
       onSaveCopy={handleSaveCopy}
       onCompare={handleCompare}
       onOpenCompare={handleOpenCompare}
